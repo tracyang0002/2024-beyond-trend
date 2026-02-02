@@ -339,6 +339,10 @@ function populateFilters() {
     <div class="multi-select-option selected" data-value="${team}">
       <span class="multi-select-checkbox"></span>
       <span class="multi-select-label">${team}</span>
+      <div class="multi-select-item-actions">
+        <button class="multi-select-item-btn" data-action="only">Only</button>
+        <button class="multi-select-item-btn" data-action="deselect">Deselect</button>
+      </div>
     </div>
   `).join('');
   
@@ -663,6 +667,10 @@ function populateHiringFilters() {
     <div class="multi-select-option selected" data-value="${region}">
       <span class="multi-select-checkbox"></span>
       <span class="multi-select-label">${region}</span>
+      <div class="multi-select-item-actions">
+        <button class="multi-select-item-btn" data-action="only">Only</button>
+        <button class="multi-select-item-btn" data-action="deselect">Deselect</button>
+      </div>
     </div>
   `).join('');
   
@@ -921,6 +929,28 @@ function initEventListeners() {
   
   // Option click
   elements.teamFilterOptions.addEventListener('click', (e) => {
+    // Check if clicked on action button
+    const actionBtn = e.target.closest('.multi-select-item-btn');
+    if (actionBtn) {
+      e.stopPropagation();
+      const option = actionBtn.closest('.multi-select-option');
+      const action = actionBtn.dataset.action;
+      
+      if (action === 'only') {
+        // Deselect all, then select only this one
+        elements.teamFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+          opt.classList.remove('selected');
+        });
+        option.classList.add('selected');
+      } else if (action === 'deselect') {
+        option.classList.remove('selected');
+      }
+      
+      updateSelectedTeams();
+      renderCharts();
+      return;
+    }
+    
     const option = e.target.closest('.multi-select-option');
     if (!option) return;
     
@@ -977,6 +1007,28 @@ function initEventListeners() {
   
   // Option click
   elements.hiringRegionFilterOptions.addEventListener('click', (e) => {
+    // Check if clicked on action button
+    const actionBtn = e.target.closest('.multi-select-item-btn');
+    if (actionBtn) {
+      e.stopPropagation();
+      const option = actionBtn.closest('.multi-select-option');
+      const action = actionBtn.dataset.action;
+      
+      if (action === 'only') {
+        // Deselect all, then select only this one
+        elements.hiringRegionFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+          opt.classList.remove('selected');
+        });
+        option.classList.add('selected');
+      } else if (action === 'deselect') {
+        option.classList.remove('selected');
+      }
+      
+      updateSelectedHiringRegions();
+      renderHiringCharts();
+      return;
+    }
+    
     const option = e.target.closest('.multi-select-option');
     if (!option) return;
     
