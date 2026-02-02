@@ -757,22 +757,24 @@ function generateHiringSummary(aggregated) {
   const cohortMetrics = {};
   cohorts.forEach(cohort => {
     const values = aggregated.cohorts[cohort] || [];
-    const validValues = values.filter(v => v !== null && v !== undefined);
+    const validValues = values.filter(v => v !== null && v !== undefined && !isNaN(v));
     
     if (validValues.length > 0) {
+      const firstValidValue = validValues[0];
+      const lastValidValue = validValues[validValues.length - 1];
       cohortMetrics[cohort] = {
-        firstQuarter: values[0],
-        latestQuarter: validValues[validValues.length - 1],
+        firstQuarter: firstValidValue,
+        latestQuarter: lastValidValue,
         quartersOfData: validValues.length,
         avgAttainment: validValues.reduce((a, b) => a + b, 0) / validValues.length,
-        trend: validValues.length > 1 ? validValues[validValues.length - 1] - values[0] : 0
+        trend: validValues.length > 1 ? lastValidValue - firstValidValue : 0
       };
     }
   });
   
   // Find best and worst performing cohorts in their first quarter
   const firstQuarterPerformers = Object.entries(cohortMetrics)
-    .filter(([_, m]) => m.firstQuarter !== null && m.firstQuarter !== undefined)
+    .filter(([_, m]) => m.firstQuarter !== null && m.firstQuarter !== undefined && !isNaN(m.firstQuarter))
     .sort((a, b) => b[1].firstQuarter - a[1].firstQuarter);
   
   if (firstQuarterPerformers.length > 0) {
@@ -793,12 +795,12 @@ function generateHiringSummary(aggregated) {
   
   // Analyze ramp-up trends for cohorts with multiple quarters
   const rampers = Object.entries(cohortMetrics)
-    .filter(([_, m]) => m.quartersOfData > 1)
+    .filter(([_, m]) => m.quartersOfData > 1 && m.firstQuarter !== null && m.latestQuarter !== null)
     .sort((a, b) => b[1].trend - a[1].trend);
   
   if (rampers.length > 0) {
     const [fastestRamper, fastMetrics] = rampers[0];
-    if (fastMetrics.trend > 0) {
+    if (fastMetrics.trend > 0 && fastMetrics.firstQuarter !== null && fastMetrics.latestQuarter !== null) {
       insights.push({
         text: `<span class="summary-highlight">${fastestRamper}</span> demonstrated the strongest ramp-up, improving <span class="summary-positive">+${fastMetrics.trend.toFixed(0)} percentage points</span> from ${fastMetrics.firstQuarter.toFixed(0)}% to ${fastMetrics.latestQuarter.toFixed(0)}%.`,
       });
@@ -848,8 +850,13 @@ function renderHiringCharts() {
   const data = getFilteredHiringData();
   const aggregated = aggregateHiringByCohort(data);
   
-  // Generate summary commentary
-  generateHiringSummary(aggregated);
+  // Generate summary commentary (wrapped in try-catch to prevent breaking charts)
+  try {
+    generateHiringSummary(aggregated);
+  } catch (err) {
+    console.error('Error generating summary:', err);
+    elements.hiringSummarySection.style.display = 'none';
+  }
   
   // Destroy existing chart
   if (STATE.hiringCharts.cohortAttainment) {
