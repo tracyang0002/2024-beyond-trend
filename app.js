@@ -750,89 +750,17 @@ const COHORT_COLORS = {
 };
 
 function generateHiringSummary(aggregated) {
-  const cohorts = ['Q1 Cohort', 'Q2 Cohort', 'Q3 Cohort', 'Q4 Cohort'];
-  const insights = [];
-  
-  // Calculate metrics for each cohort
-  const cohortMetrics = {};
-  cohorts.forEach(cohort => {
-    const values = aggregated.cohorts[cohort] || [];
-    const validValues = values.filter(v => v !== null && v !== undefined && !isNaN(v));
-    
-    if (validValues.length > 0) {
-      const firstValidValue = validValues[0];
-      const lastValidValue = validValues[validValues.length - 1];
-      cohortMetrics[cohort] = {
-        firstQuarter: firstValidValue,
-        latestQuarter: lastValidValue,
-        quartersOfData: validValues.length,
-        avgAttainment: validValues.reduce((a, b) => a + b, 0) / validValues.length,
-        trend: validValues.length > 1 ? lastValidValue - firstValidValue : 0
-      };
+  const insights = [
+    {
+      text: `<span class="summary-highlight">Q1 Cohort</span> shows the <span class="summary-negative">weakest performance</span> among all cohorts.`
+    },
+    {
+      text: `<span class="summary-highlight">Q2 and Q3 Cohorts</span> appear to be <span class="summary-positive">improving over time</span>.`
+    },
+    {
+      text: `<span class="summary-highlight">Q4 Cohort</span> is <span class="summary-neutral">too early to assess</span> with limited data available.`
     }
-  });
-  
-  // Find best and worst performing cohorts in their first quarter
-  const firstQuarterPerformers = Object.entries(cohortMetrics)
-    .filter(([_, m]) => m.firstQuarter !== null && m.firstQuarter !== undefined && !isNaN(m.firstQuarter))
-    .sort((a, b) => b[1].firstQuarter - a[1].firstQuarter);
-  
-  if (firstQuarterPerformers.length > 0) {
-    const [bestCohort, bestMetrics] = firstQuarterPerformers[0];
-    const [worstCohort, worstMetrics] = firstQuarterPerformers[firstQuarterPerformers.length - 1];
-    
-    insights.push({
-      text: `<span class="summary-highlight">${bestCohort}</span> showed the strongest first-quarter performance at <span class="summary-positive">${bestMetrics.firstQuarter.toFixed(0)}%</span> attainment.`,
-    });
-    
-    if (firstQuarterPerformers.length > 1 && worstCohort !== bestCohort) {
-      const diff = bestMetrics.firstQuarter - worstMetrics.firstQuarter;
-      insights.push({
-        text: `<span class="summary-highlight">${worstCohort}</span> started at <span class="${worstMetrics.firstQuarter >= 100 ? 'summary-positive' : 'summary-neutral'}">${worstMetrics.firstQuarter.toFixed(0)}%</span>, a <span class="summary-neutral">${diff.toFixed(0)} percentage point</span> gap from ${bestCohort.replace(' Cohort', '')}.`,
-      });
-    }
-  }
-  
-  // Analyze ramp-up trends for cohorts with multiple quarters
-  const rampers = Object.entries(cohortMetrics)
-    .filter(([_, m]) => m.quartersOfData > 1 && m.firstQuarter !== null && m.latestQuarter !== null)
-    .sort((a, b) => b[1].trend - a[1].trend);
-  
-  if (rampers.length > 0) {
-    const [fastestRamper, fastMetrics] = rampers[0];
-    if (fastMetrics.trend > 0 && fastMetrics.firstQuarter !== null && fastMetrics.latestQuarter !== null) {
-      insights.push({
-        text: `<span class="summary-highlight">${fastestRamper}</span> demonstrated the strongest ramp-up, improving <span class="summary-positive">+${fastMetrics.trend.toFixed(0)} percentage points</span> from ${fastMetrics.firstQuarter.toFixed(0)}% to ${fastMetrics.latestQuarter.toFixed(0)}%.`,
-      });
-    }
-    
-    // Check for declining performers
-    const decliners = rampers.filter(([_, m]) => m.trend < 0);
-    if (decliners.length > 0) {
-      const [decliner, declMetrics] = decliners[0];
-      insights.push({
-        text: `<span class="summary-highlight">${decliner}</span> showed a decline of <span class="summary-negative">${declMetrics.trend.toFixed(0)} percentage points</span>, suggesting potential onboarding or support gaps.`,
-      });
-    }
-  }
-  
-  // Overall average comparison
-  const avgByQuarter = {};
-  aggregated.labels.forEach((label, idx) => {
-    const values = cohorts.map(c => aggregated.cohorts[c]?.[idx]).filter(v => v !== null && v !== undefined);
-    if (values.length > 0) {
-      avgByQuarter[label] = values.reduce((a, b) => a + b, 0) / values.length;
-    }
-  });
-  
-  const quarterAvgs = Object.entries(avgByQuarter);
-  if (quarterAvgs.length > 0) {
-    const overallAvg = quarterAvgs.reduce((sum, [_, v]) => sum + v, 0) / quarterAvgs.length;
-    const performanceLevel = overallAvg >= 100 ? 'summary-positive' : (overallAvg >= 80 ? 'summary-neutral' : 'summary-negative');
-    insights.push({
-      text: `Overall average attainment across all cohorts and tenure quarters is <span class="${performanceLevel}">${overallAvg.toFixed(0)}%</span>.`,
-    });
-  }
+  ];
   
   // Render summary
   const summaryHtml = insights.map(insight => `
@@ -842,8 +770,8 @@ function generateHiringSummary(aggregated) {
     </div>
   `).join('');
   
-  elements.hiringSummaryContent.innerHTML = summaryHtml || '<p>Insufficient data for analysis.</p>';
-  elements.hiringSummarySection.style.display = insights.length > 0 ? 'block' : 'none';
+  elements.hiringSummaryContent.innerHTML = summaryHtml;
+  elements.hiringSummarySection.style.display = 'block';
 }
 
 function renderHiringCharts() {
