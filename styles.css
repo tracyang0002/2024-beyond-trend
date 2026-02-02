@@ -293,7 +293,7 @@ body {
 /* Multi-Select Dropdown */
 .multi-select {
   position: relative;
-  min-width: 220px;
+  min-width: 320px;
 }
 
 .multi-select-btn {
@@ -536,13 +536,13 @@ body {
 .refresh-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  padding: 12px 20px;
-  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
   cursor: pointer;
@@ -560,7 +560,7 @@ body {
 }
 
 .refresh-icon {
-  font-size: 16px;
+  font-size: 14px;
   transition: transform var(--transition-normal);
 }
 
