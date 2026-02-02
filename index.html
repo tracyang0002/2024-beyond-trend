@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sales Analytics Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <div class="logo-section">
+          <div class="logo-icon">📊</div>
+          <h1>Sales Analytics</h1>
+        </div>
+        <div class="auth-status" id="authStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Checking permissions...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Auth Banner (shown when permissions needed) -->
+    <div class="auth-banner" id="authBanner" style="display: none;">
+      <div class="auth-banner-content">
+        <span class="auth-icon">🔐</span>
+        <span class="auth-message">BigQuery access required to load data</span>
+        <button class="auth-button" id="authButton">Grant Access</button>
+      </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="revenue" id="tabRevenue">
+        <span class="tab-icon">💰</span>
+        Revenue Analytics
+      </button>
+      <button class="tab-btn" data-tab="hiring" id="tabHiring">
+        <span class="tab-icon">👥</span>
+        Hiring Cohort Analysis
+      </button>
+    </nav>
+
+    <!-- ==================== TAB 1: Revenue Analytics ==================== -->
+    <div class="tab-content active" id="revenueTab">
+      <!-- Controls Section -->
+      <section class="controls-section">
+        <div class="controls-grid">
+          <!-- Team Filter -->
+          <div class="filter-group">
+            <label class="filter-label">Team (Restated)</label>
+            <div class="multi-select" id="teamFilterContainer">
+              <button class="multi-select-btn" id="teamFilterBtn" disabled>
+                <span class="multi-select-text">All Teams</span>
+                <span class="multi-select-arrow">▾</span>
+              </button>
+              <div class="multi-select-dropdown" id="teamFilterDropdown">
+                <div class="multi-select-search">
+                  <input type="text" placeholder="Search teams..." id="teamFilterSearch">
+                </div>
+                <div class="multi-select-options" id="teamFilterOptions">
+                  <!-- Options populated by JS -->
+                </div>
+                <div class="multi-select-actions">
+                  <button class="multi-select-action" id="teamSelectAll">Select All</button>
+                  <button class="multi-select-action" id="teamClearAll">Clear All</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Refresh Button -->
+          <div class="filter-group">
+            <label class="filter-label">&nbsp;</label>
+            <button class="refresh-btn" id="refreshBtn" disabled>
+              <span class="refresh-icon">↻</span>
+              Refresh Data
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Loading State -->
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading analytics data...</p>
+      </div>
+
+      <!-- Charts Section -->
+      <section class="charts-section" id="chartsSection">
+        <div class="charts-grid">
+          <!-- Chart 1: Deals per Rep -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3 class="chart-title">Deals per Rep</h3>
+              <p class="chart-subtitle">CW Count / Distinct Reps</p>
+            </div>
+            <div class="chart-container">
+              <canvas id="dealsPerRepChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 2: Deal Size -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3 class="chart-title">Deal Size</h3>
+              <p class="chart-subtitle">LTR / CW Count</p>
+            </div>
+            <div class="chart-container">
+              <canvas id="dealSizeChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 3: Attainment % -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3 class="chart-title">Attainment %</h3>
+              <p class="chart-subtitle">Actuals / Targets (excludes teams without targets)</p>
+            </div>
+            <div class="chart-container">
+              <canvas id="attainmentChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State -->
+      <div class="empty-state" id="emptyState" style="display: none;">
+        <div class="empty-icon">📈</div>
+        <h3>No Data Available</h3>
+        <p>No data found for the selected filters. Try adjusting your selection.</p>
+      </div>
+    </div>
+
+    <!-- ==================== TAB 2: Hiring Cohort Analysis ==================== -->
+    <div class="tab-content" id="hiringTab">
+      <!-- Controls Section for Hiring -->
+      <section class="controls-section">
+        <div class="controls-grid">
+          <!-- Region Filter -->
+          <div class="filter-group">
+            <label class="filter-label">Region</label>
+            <div class="multi-select" id="hiringRegionFilterContainer">
+              <button class="multi-select-btn" id="hiringRegionFilterBtn" disabled>
+                <span class="multi-select-text">All Regions (Global)</span>
+                <span class="multi-select-arrow">▾</span>
+              </button>
+              <div class="multi-select-dropdown" id="hiringRegionFilterDropdown">
+                <div class="multi-select-options" id="hiringRegionFilterOptions">
+                  <!-- Options populated by JS -->
+                </div>
+                <div class="multi-select-actions">
+                  <button class="multi-select-action" id="hiringRegionSelectAll">Select All</button>
+                  <button class="multi-select-action" id="hiringRegionClearAll">Clear All</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Refresh Button -->
+          <div class="filter-group">
+            <label class="filter-label">&nbsp;</label>
+            <button class="refresh-btn" id="refreshHiringBtn" disabled>
+              <span class="refresh-icon">↻</span>
+              Refresh Data
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Loading State for Hiring -->
+      <div class="loading-overlay" id="hiringLoadingOverlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading hiring cohort data...</p>
+      </div>
+
+      <!-- Summary Commentary Section -->
+      <section class="summary-section" id="hiringSummarySection" style="display: none;">
+        <div class="summary-card">
+          <div class="summary-header">
+            <span class="summary-icon">📋</span>
+            <h3>Cohort Performance Summary</h3>
+          </div>
+          <div class="summary-content" id="hiringSummaryContent">
+            <!-- Dynamic content will be inserted here -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Hiring Charts Section -->
+      <section class="charts-section" id="hiringChartsSection">
+        <div class="charts-grid hiring-charts-grid">
+          <!-- Cohort Attainment Chart -->
+          <div class="chart-card chart-card-wide">
+            <div class="chart-header">
+              <h3 class="chart-title">Cohort Attainment by Tenure</h3>
+              <p class="chart-subtitle">Avg Attainment % by quarter since hire</p>
+            </div>
+            <div class="chart-container chart-container-wide">
+              <canvas id="cohortAttainmentChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State for Hiring -->
+      <div class="empty-state" id="hiringEmptyState" style="display: none;">
+        <div class="empty-icon">👥</div>
+        <h3>No Hiring Data Available</h3>
+        <p>No data found for the selected filters. Try adjusting your selection.</p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>Sales Analytics Dashboard • Data refreshed from BigQuery</p>
+    </footer>
+  </div>
+
+  <script src="/client/quick.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
