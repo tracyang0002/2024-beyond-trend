@@ -789,6 +789,17 @@ body {
   font-weight: 600;
 }
 
+/* Full Width Charts Grid */
+.charts-grid-full {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+.chart-card-full {
+  max-width: 100%;
+}
+
 /* Hiring Charts Grid */
 .hiring-charts-grid {
   grid-template-columns: 1fr;

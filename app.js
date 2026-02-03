@@ -18,7 +18,8 @@ const STATE = {
   charts: {
     dealsPerRep: null,
     dealSize: null,
-    attainment: null
+    attainment: null,
+    actualsVsTargets: null
   },
   // Hiring tab state
   hiringData: [],
@@ -606,6 +607,124 @@ function renderCharts() {
   STATE.charts.attainment = new Chart(
     document.getElementById('attainmentChart'),
     createChartConfig('line', labelsForAttainment, attainmentDatasets, 'Attainment (%)', true)
+  );
+  
+  // Chart 4: Actuals vs Targets
+  const actualsDatasets = REGIONS.map(region => ({
+    label: `${region} Actuals`,
+    data: aggregatedForAttainment.map(q => {
+      const regionData = q.regions.get(region);
+      if (!regionData) return null;
+      return regionData.CW_LTR_sum;
+    }),
+    borderColor: REGION_COLORS[region],
+    backgroundColor: REGION_COLORS[region] + '33',
+    tension: 0.3,
+    pointRadius: 5,
+    pointHoverRadius: 8,
+    borderWidth: 3,
+    borderDash: [], // Solid line for actuals
+    spanGaps: true
+  }));
+  
+  const targetsDatasets = REGIONS.map(region => ({
+    label: `${region} Targets`,
+    data: aggregatedForAttainment.map(q => {
+      const regionData = q.regions.get(region);
+      if (!regionData || regionData.target_revenue === 0) return null;
+      return regionData.target_revenue;
+    }),
+    borderColor: REGION_COLORS[region],
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    borderWidth: 2,
+    borderDash: [8, 4], // Dashed line for targets
+    spanGaps: true
+  }));
+  
+  // Interleave actuals and targets for better legend grouping
+  const actualsVsTargetsDatasets = [];
+  REGIONS.forEach((region, idx) => {
+    actualsVsTargetsDatasets.push(actualsDatasets[idx]);
+    actualsVsTargetsDatasets.push(targetsDatasets[idx]);
+  });
+  
+  STATE.charts.actualsVsTargets = new Chart(
+    document.getElementById('actualsVsTargetsChart'),
+    {
+      type: 'line',
+      data: { labels: labelsForAttainment, datasets: actualsVsTargetsDatasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#475569',
+              font: { family: "'DM Sans', sans-serif", size: 11 },
+              boxWidth: 20,
+              padding: 15,
+              usePointStyle: false
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            titleColor: '#1e293b',
+            bodyColor: '#475569',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            padding: 12,
+            titleFont: { family: "'DM Sans', sans-serif", weight: 600 },
+            bodyFont: { family: "'JetBrains Mono', monospace", size: 12 },
+            callbacks: {
+              label: function(context) {
+                let value = context.parsed.y;
+                if (value >= 1000000) {
+                  return `${context.dataset.label}: $${(value / 1000000).toFixed(2)}M`;
+                }
+                if (value >= 1000) {
+                  return `${context.dataset.label}: $${(value / 1000).toFixed(1)}K`;
+                }
+                return `${context.dataset.label}: $${value.toFixed(0)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
+          },
+          y: {
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: {
+              color: '#475569',
+              font: { family: "'JetBrains Mono', monospace", size: 11 },
+              callback: function(value) {
+                if (value >= 1000000000) return '$' + (value / 1000000000).toFixed(1) + 'B';
+                if (value >= 1000000) return '$' + (value / 1000000).toFixed(0) + 'M';
+                if (value >= 1000) return '$' + (value / 1000).toFixed(0) + 'K';
+                return '$' + value;
+              }
+            },
+            title: {
+              display: true,
+              text: 'LTR ($)',
+              color: '#64748b',
+              font: { family: "'DM Sans', sans-serif", size: 12 }
+            }
+          }
+        }
+      }
+    }
   );
 }
 
