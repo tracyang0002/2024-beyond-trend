@@ -609,47 +609,48 @@ function renderCharts() {
     createChartConfig('line', labelsForAttainment, attainmentDatasets, 'Attainment (%)', true)
   );
   
-  // Chart 4: Actuals vs Targets
-  const actualsDatasets = REGIONS.map(region => ({
-    label: `${region} Actuals`,
-    data: aggregatedForAttainment.map(q => {
-      const regionData = q.regions.get(region);
-      if (!regionData) return null;
-      return regionData.CW_LTR_sum;
-    }),
-    borderColor: REGION_COLORS[region],
-    backgroundColor: REGION_COLORS[region] + '33',
-    tension: 0.3,
-    pointRadius: 5,
-    pointHoverRadius: 8,
-    borderWidth: 3,
-    borderDash: [], // Solid line for actuals
-    spanGaps: true
-  }));
-  
-  const targetsDatasets = REGIONS.map(region => ({
-    label: `${region} Targets`,
-    data: aggregatedForAttainment.map(q => {
-      const regionData = q.regions.get(region);
-      if (!regionData || regionData.target_revenue === 0) return null;
-      return regionData.target_revenue;
-    }),
-    borderColor: REGION_COLORS[region],
-    backgroundColor: 'transparent',
-    tension: 0.3,
-    pointRadius: 4,
-    pointHoverRadius: 6,
-    borderWidth: 2,
-    borderDash: [8, 4], // Dashed line for targets
-    spanGaps: true
-  }));
-  
-  // Interleave actuals and targets for better legend grouping
-  const actualsVsTargetsDatasets = [];
-  REGIONS.forEach((region, idx) => {
-    actualsVsTargetsDatasets.push(actualsDatasets[idx]);
-    actualsVsTargetsDatasets.push(targetsDatasets[idx]);
+  // Chart 4: Actuals vs Targets (Total across all regions)
+  const totalActualsData = aggregatedForAttainment.map(q => {
+    let total = 0;
+    q.regions.forEach(regionData => {
+      total += regionData.CW_LTR_sum || 0;
+    });
+    return total > 0 ? total : null;
   });
+  
+  const totalTargetsData = aggregatedForAttainment.map(q => {
+    let total = 0;
+    q.regions.forEach(regionData => {
+      total += regionData.target_revenue || 0;
+    });
+    return total > 0 ? total : null;
+  });
+  
+  const actualsVsTargetsDatasets = [
+    {
+      label: 'Actuals (LTR)',
+      data: totalActualsData,
+      borderColor: 'rgb(16, 185, 129)', // Emerald
+      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+      tension: 0.3,
+      pointRadius: 6,
+      pointHoverRadius: 9,
+      borderWidth: 3,
+      fill: true
+    },
+    {
+      label: 'Targets (LTR)',
+      data: totalTargetsData,
+      borderColor: 'rgb(59, 130, 246)', // Blue
+      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+      tension: 0.3,
+      pointRadius: 6,
+      pointHoverRadius: 9,
+      borderWidth: 3,
+      borderDash: [8, 4], // Dashed line for targets
+      fill: false
+    }
+  ];
   
   STATE.charts.actualsVsTargets = new Chart(
     document.getElementById('actualsVsTargetsChart'),
