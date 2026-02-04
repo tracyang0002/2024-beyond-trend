@@ -41,16 +41,8 @@ WITH final as (
     tsp.owner_region,
     CASE
       WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
-      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'SMB' THEN 'Lending SMB Cross-Sell'
-      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'Mid-Mkt' THEN 'Lending Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'Mid-Mkt SMB' THEN 'Lending Mid-Mkt SMB Cross-Sell'
-      WHEN tsp.owner_line_of_business = 'Ads' AND tsp.owner_segment = 'Large' THEN 'Ads Large Cross-Sell'
-      WHEN tsp.owner_line_of_business = 'Ads' AND tsp.owner_segment = 'Mid-Mkt' THEN 'Ads Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_line_of_business = 'Ads' AND ual.estimated_total_annual_revenue_usd >= 40000000 THEN 'Ads Large Cross-Sell'
-      WHEN tsp.owner_line_of_business = 'Ads' THEN 'Ads Mid-Mkt Cross-Sell'
       WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
       WHEN tsp.owner_line_of_business = 'B2B' THEN 'B2B Large Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_segment IN ('Mid-Mkt','Large','Large Mid-Mkt') AND tsp.owner_line_of_business = 'D2C' AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'CSM MM LA Cross-Sell'
       WHEN tsp.owner_segment IN ('Mid-Mkt') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Mid-Mkt'
       WHEN tsp.owner_segment IN ('Large') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Large'
       WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'D2C Retail SMB Cross-Sell'
@@ -80,6 +72,8 @@ WITH final as (
   LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
   LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
   WHERE tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
+    AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
+    AND tsp.owner_team NOT LIKE '%CSM%'
   GROUP BY ALL
 )
 SELECT *
