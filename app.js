@@ -19,7 +19,7 @@ const STATE = {
     dealsPerRep: null,
     dealSize: null,
     attainment: null,
-    actualsVsTargets: null
+    winRate: null
   },
   // Hiring tab state
   hiringData: [],
@@ -36,121 +36,56 @@ const STATE = {
 // ============================================================================
 
 const BQ_QUERY = `
-WITH teams as (
-  SELECT 'Retail All' as old_team, 'D2C Retail Large' as new_team, 0.25 as target_multiplier
-  UNION ALL SELECT 'Retail All', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail All', 'Retail SMB Acquisition', 0.25
-  UNION ALL SELECT 'Retail All', 'D2C Retail SMB Cross-Sell', 0.25
-  UNION ALL SELECT 'Retail SMB', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail SMB', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail SMB', 'Retail SMB Acquisition', 0.25
-  UNION ALL SELECT 'Retail SMB', 'D2C Retail SMB Cross-Sell', 0.25
-  UNION ALL SELECT 'Retail EMEA MM/LA Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail EMEA MM/LA Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail EMEA MM/LA Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail Large Mid-Mkt Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Large Mid-Mkt Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Large Mid-Mkt Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail EMEA Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail EMEA Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail EMEA Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail APAC Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail APAC Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail APAC Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail Mid-Mkt Large Acquisition', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Mid-Mkt Large Acquisition', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Mid-Mkt Large Acquisition', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail IRL', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail IRL', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail IRL', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'N3 Retail', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'N3 Retail', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'N3 Retail', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail N3', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail N3', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail N3', 'Retail SMB Acquisition', 0.5
-  UNION ALL SELECT 'Retail EMEA Cross-Sell', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail EMEA Cross-Sell', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail EMEA Cross-Sell', 'D2C Retail SMB Cross-Sell', 0.5
-  UNION ALL SELECT 'Retail Cross-Sell', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Cross-Sell', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Cross-Sell', 'D2C Retail SMB Cross-Sell', 0.5
-  UNION ALL SELECT 'Retail Mid-Mkt Large Cross-Sell', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Mid-Mkt Large Cross-Sell', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Mid-Mkt Large Cross-Sell', 'D2C Retail SMB Cross-Sell', 0.5
-  UNION ALL SELECT 'Retail Large Mid-Mkt Cross-Sell', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail Large Mid-Mkt Cross-Sell', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail Large Mid-Mkt Cross-Sell', 'D2C Retail SMB Cross-Sell', 0.5
-  UNION ALL SELECT 'Retail EMEA MM/LA Cross-Sell', 'D2C Retail Large', 0.25
-  UNION ALL SELECT 'Retail EMEA MM/LA Cross-Sell', 'D2C Retail Mid-Mkt', 0.25
-  UNION ALL SELECT 'Retail EMEA MM/LA Cross-Sell', 'D2C Retail SMB Cross-Sell', 0.5
-),
-final as (
+WITH final as (
   SELECT 
     tsp.owner_region,
     CASE
-      WHEN teams.new_team IS NOT NULL THEN teams.new_team
-      WHEN tsp.owner_team LIKE '%CSM%' THEN 'CSM MM LA Cross-Sell'
-      WHEN tsp.owner_team IN ('B2B Acquisition','B2B Large Mid-Mkt Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
-      WHEN tsp.owner_team IN ('B2B Cross-Sell') THEN 'B2B Large Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_team IN ('D2C Plus MM/LA Cross-Sell','D2C Cross-Sell','D2C Plus MM Cross-Sell','D2C Plus LA Cross-Sell','D2C Plus Cross-Sell','CSM MM','CSM LA','D2C Large Cross-Sell','D2C Mid-Mkt Cross-Sell','D2C Mid-Mkt Large Cross-Sell') THEN 'CSM MM LA Cross-Sell'
-      WHEN tsp.owner_team IN ('D2C SMB Cross-Sell') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('Enterprise','Consumer Good','Diversified Industries','Food, Alcohol, & Beverage','Lifestyle','Manufacturing') THEN 'Enterprise'
-      WHEN tsp.owner_team IN ('Global Account') THEN 'Global Account'
-      WHEN tsp.owner_team IN ('D2C Large','Large Accounts') THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Lending Mid-Mkt Cross-Sell') THEN 'Lending Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_team IN ('Lending Mid-Mkt SMB Cross-Sell') THEN 'Lending Mid-Mkt SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('Lending SMB Cross-Sell') THEN 'Lending SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('D2C Mid-Mkt','D2C Mid-Mkt BPO','Mid Market','D2C Mid-Mkt N3','N3 Mid Market') THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail EMEA MM/LA Acquisition','Retail EMEA Acquisition','Retail APAC Acquisition','Retail Acquisition','Retail Mid-Mkt Large Acquisition','Retail Large Mid-Mkt Acquisition','Retail IRL','N3 Retail','Retail N3') AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail EMEA Cross-Sell','Retail Cross-Sell','Retail APAC Cross-Sell','Retail Mid-Mkt Large Cross-Sell','Retail EMEA MM/LA Cross-Sell') AND IFNULL(ual.estimated_total_annual_revenue_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail EMEA MM/LA Acquisition','Retail EMEA Acquisition','Retail APAC Acquisition','Retail Acquisition','Retail Mid-Mkt Large Acquisition','Retail Large Mid-Mkt Acquisition','Retail IRL','N3 Retail','Retail N3','D2C Mid-Mkt SMB') AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail EMEA Cross-Sell','Retail Cross-Sell','Retail APAC Cross-Sell','Retail Mid-Mkt Large Cross-Sell','Retail EMEA MM/LA Cross-Sell') AND IFNULL(ual.estimated_total_annual_revenue_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail EMEA MM/LA Acquisition','Retail EMEA Acquisition','Retail APAC Acquisition','Retail Acquisition','Retail Mid-Mkt Large Acquisition','Retail Large Mid-Mkt Acquisition','Retail IRL','N3 Retail','Retail N3','Retail SMB BPO','Retail EMEA SMB Acquisition') THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_team IN ('D2C SMB Acquisition','D2C Mid-Mkt SMB') THEN 'D2C SMB Acquisition'
-      WHEN tsp.owner_team IN ('Retail EMEA Cross-Sell','Retail Cross-Sell','Retail APAC Cross-Sell','Retail Mid-Mkt Large Cross-Sell','Retail EMEA MM/LA Cross-Sell','Retail EMEA SMB Cross-Sell') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('Retail SMB') AND tsp.owner_motion = 'Acquisition' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_team IN ('Retail SMB') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('Retail SMB Acquisition') THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_team IN ('Retail SMB Cross-Sell') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_team IN ('Retail Large Acquisition','Retail LA Acquisition') THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail Large Cross-Sell','Retail LA Cross-Sell') THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail Mid-Mkt Acquisition','Retail MM Acquisition') THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail Mid-Mkt Cross-Sell','Retail MM Cross-Sell') THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') AND tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') AND tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') AND tsp.owner_motion = 'Acquisition' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') AND IFNULL(ual.estimated_total_annual_revenue_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') AND IFNULL(ual.estimated_total_annual_revenue_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_team IN ('Retail All','Retail EMEA','Retail APAC') THEN 'D2C Retail SMB Cross-Sell'
-      ELSE tsp.owner_team
-    END as owner_team_approach_1,
+      WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
+      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'SMB' THEN 'Lending SMB Cross-Sell'
+      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'Mid-Mkt' THEN 'Lending Mid-Mkt Cross-Sell'
+      WHEN tsp.owner_line_of_business IN ('Lending') AND tsp.owner_segment = 'Mid-Mkt SMB' THEN 'Lending Mid-Mkt SMB Cross-Sell'
+      WHEN tsp.owner_line_of_business = 'Ads' AND tsp.owner_segment = 'Large' THEN 'Ads Large Cross-Sell'
+      WHEN tsp.owner_line_of_business = 'Ads' AND tsp.owner_segment = 'Mid-Mkt' THEN 'Ads Mid-Mkt Cross-Sell'
+      WHEN tsp.owner_line_of_business = 'Ads' AND ual.estimated_total_annual_revenue_usd >= 40000000 THEN 'Ads Large Cross-Sell'
+      WHEN tsp.owner_line_of_business = 'Ads' THEN 'Ads Mid-Mkt Cross-Sell'
+      WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
+      WHEN tsp.owner_line_of_business = 'B2B' THEN 'B2B Large Mid-Mkt Cross-Sell'
+      WHEN tsp.owner_segment IN ('Mid-Mkt','Large','Large Mid-Mkt') AND tsp.owner_line_of_business = 'D2C' AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'CSM MM LA Cross-Sell'
+      WHEN tsp.owner_segment IN ('Mid-Mkt') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Mid-Mkt'
+      WHEN tsp.owner_segment IN ('Large') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Large'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'D2C Retail SMB Cross-Sell'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
+      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
+      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
+      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
+      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
+      WHEN ual.estimated_total_annual_revenue_usd > 40000000 THEN 'D2C Retail Large'
+      WHEN ual.estimated_total_annual_revenue_usd > 5000000 THEN 'D2C Retail Mid-Mkt'
+      ELSE 'D2C Retail SMB Cross-Sell'
+    END as team_restated,
     EXTRACT(year FROM tsp.close_date) as year,
     CONCAT('Q', EXTRACT(quarter FROM tsp.close_date)) as quarter,
     SUM(tsp.closed_won_lifetime_total_revenue) as CW_LTR_sum,
     SUM(tsp.closed_won_opportunity_count) as CW_cnt_sum,
+    SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN 1 ELSE 0 END) as closed_deal_cnt,
     COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END) as rep_distinct,
-    SUM(tsp.closed_won_lifetime_total_revenue_target * IFNULL(teams.target_multiplier,1)) as target_revenue,
+    SUM(tsp.closed_won_lifetime_total_revenue_target) as target_revenue,
     -- Calculated metrics
     SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END)) as deals_per_rep,
     SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_opportunity_count)) as deal_size,
-    SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_lifetime_total_revenue_target * IFNULL(teams.target_multiplier,1))) * 100 as attainment_pct
+    SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_lifetime_total_revenue_target)) * 100 as attainment_pct,
+    SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN 1 ELSE 0 END)) * 100 as win_rate_pct
   FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
-  LEFT JOIN teams ON tsp.owner_team = teams.old_team AND tsp.closed_won_lifetime_total_revenue_target > 0
   LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
   LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
-  WHERE tsp.owner_line_of_business NOT IN ('Ads','Lending')
-    AND tsp.owner_team NOT IN ('Launch','Partner','Consumer Goods','Core Cross-Sell','Cross-Sell','Plus Cross-Sell Large Accounts','Plus Cross-Sell MM Assigned','Plus Cross-Sell MM Shared','Sales Concierge','Sales Incubation','Unknown','Plus Cross-Sell MM','Retail APAC','Retail EMEA','Plus Cross-Sell MMA/LA','Plus Cross-Sell MM Assigned/LA','CSM MM LA Cross-Sell','CSM Enterprise','CSM Global Account','CSM LA','CSM Large','CSM MM','CSM Mid-Mkt','CSM Unicorn','D2C Plus MM/LA Cross-Sell','D2C Cross-Sell','D2C Plus MM Cross-Sell','D2C Plus LA Cross-Sell','D2C Plus Cross-Sell','CSM MM','CSM LA','D2C Large Cross-Sell','D2C Mid-Mkt Cross-Sell','D2C Mid-Mkt Large Cross-Sell','Retail N3','N3 Retail')
-    AND tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
+  WHERE tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
   GROUP BY ALL
 )
 SELECT *
 FROM final
 WHERE target_revenue > 0
-ORDER BY owner_region, owner_team_approach_1, year, quarter
+ORDER BY owner_region, team_restated, year, quarter
 `;
 
 // Hiring Cohort Analysis Query
@@ -330,8 +265,8 @@ function showCharts() {
 // ============================================================================
 
 function populateFilters() {
-  // Get unique teams (owner_team_approach_1)
-  const teams = [...new Set(STATE.data.map(d => d.owner_team_approach_1).filter(Boolean))].sort();
+  // Get unique teams (team_restated)
+  const teams = [...new Set(STATE.data.map(d => d.team_restated).filter(Boolean))].sort();
   STATE.allTeams = teams;
   STATE.selectedTeams = []; // Empty means all selected
   
@@ -368,7 +303,7 @@ function getFilteredData() {
   
   // Apply team filter (empty array means all)
   if (STATE.selectedTeams.length > 0 && STATE.selectedTeams.length < STATE.allTeams.length) {
-    filtered = filtered.filter(d => STATE.selectedTeams.includes(d.owner_team_approach_1));
+    filtered = filtered.filter(d => STATE.selectedTeams.includes(d.team_restated));
   }
   
   return filtered;
@@ -383,7 +318,7 @@ function getFilteredDataForAttainment() {
   
   // Apply team filter (empty array means all)
   if (STATE.selectedTeams.length > 0 && STATE.selectedTeams.length < STATE.allTeams.length) {
-    filtered = filtered.filter(d => STATE.selectedTeams.includes(d.owner_team_approach_1));
+    filtered = filtered.filter(d => STATE.selectedTeams.includes(d.team_restated));
   }
   
   return filtered;
@@ -430,6 +365,7 @@ function aggregateByQuarter(data) {
       quarterData.regions.set(region, {
         CW_cnt_sum: 0,
         CW_LTR_sum: 0,
+        closed_deal_cnt: 0,
         rep_distinct: 0,
         target_revenue: 0
       });
@@ -438,6 +374,7 @@ function aggregateByQuarter(data) {
     const regionData = quarterData.regions.get(region);
     regionData.CW_cnt_sum += row.CW_cnt_sum || 0;
     regionData.CW_LTR_sum += row.CW_LTR_sum || 0;
+    regionData.closed_deal_cnt += row.closed_deal_cnt || 0;
     regionData.rep_distinct += row.rep_distinct || 0;
     regionData.target_revenue += row.target_revenue || 0;
   });
@@ -609,123 +546,26 @@ function renderCharts() {
     createChartConfig('line', labelsForAttainment, attainmentDatasets, 'Attainment (%)', true)
   );
   
-  // Chart 4: Actuals vs Targets (Total across all regions)
-  const totalActualsData = aggregatedForAttainment.map(q => {
-    let total = 0;
-    q.regions.forEach(regionData => {
-      total += regionData.CW_LTR_sum || 0;
-    });
-    return total > 0 ? total : null;
-  });
+  // Chart 4: Win Rate %
+  const winRateDatasets = REGIONS.map(region => ({
+    label: region,
+    data: aggregated.map(q => {
+      const regionData = q.regions.get(region);
+      if (!regionData || regionData.closed_deal_cnt === 0) return null;
+      return (regionData.CW_cnt_sum / regionData.closed_deal_cnt) * 100;
+    }),
+    borderColor: REGION_COLORS[region],
+    backgroundColor: REGION_COLORS[region] + '33',
+    tension: 0.3,
+    pointRadius: 5,
+    pointHoverRadius: 8,
+    borderWidth: 3,
+    spanGaps: true
+  }));
   
-  const totalTargetsData = aggregatedForAttainment.map(q => {
-    let total = 0;
-    q.regions.forEach(regionData => {
-      total += regionData.target_revenue || 0;
-    });
-    return total > 0 ? total : null;
-  });
-  
-  const actualsVsTargetsDatasets = [
-    {
-      label: 'Actuals (LTR)',
-      data: totalActualsData,
-      borderColor: 'rgb(16, 185, 129)', // Emerald
-      backgroundColor: 'rgba(16, 185, 129, 0.1)',
-      tension: 0.3,
-      pointRadius: 6,
-      pointHoverRadius: 9,
-      borderWidth: 3,
-      fill: true
-    },
-    {
-      label: 'Targets (LTR)',
-      data: totalTargetsData,
-      borderColor: 'rgb(59, 130, 246)', // Blue
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
-      tension: 0.3,
-      pointRadius: 6,
-      pointHoverRadius: 9,
-      borderWidth: 3,
-      borderDash: [8, 4], // Dashed line for targets
-      fill: false
-    }
-  ];
-  
-  STATE.charts.actualsVsTargets = new Chart(
-    document.getElementById('actualsVsTargetsChart'),
-    {
-      type: 'line',
-      data: { labels: labelsForAttainment, datasets: actualsVsTargetsDatasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-          mode: 'index',
-          intersect: false
-        },
-        plugins: {
-          legend: {
-            display: true,
-            position: 'bottom',
-            labels: {
-              color: '#475569',
-              font: { family: "'DM Sans', sans-serif", size: 11 },
-              boxWidth: 20,
-              padding: 15,
-              usePointStyle: false
-            }
-          },
-          tooltip: {
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            titleColor: '#1e293b',
-            bodyColor: '#475569',
-            borderColor: '#e2e8f0',
-            borderWidth: 1,
-            padding: 12,
-            titleFont: { family: "'DM Sans', sans-serif", weight: 600 },
-            bodyFont: { family: "'JetBrains Mono', monospace", size: 12 },
-            callbacks: {
-              label: function(context) {
-                let value = context.parsed.y;
-                if (value >= 1000000) {
-                  return `${context.dataset.label}: $${(value / 1000000).toFixed(2)}M`;
-                }
-                if (value >= 1000) {
-                  return `${context.dataset.label}: $${(value / 1000).toFixed(1)}K`;
-                }
-                return `${context.dataset.label}: $${value.toFixed(0)}`;
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
-            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
-          },
-          y: {
-            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
-            ticks: {
-              color: '#475569',
-              font: { family: "'JetBrains Mono', monospace", size: 11 },
-              callback: function(value) {
-                if (value >= 1000000000) return '$' + (value / 1000000000).toFixed(1) + 'B';
-                if (value >= 1000000) return '$' + (value / 1000000).toFixed(0) + 'M';
-                if (value >= 1000) return '$' + (value / 1000).toFixed(0) + 'K';
-                return '$' + value;
-              }
-            },
-            title: {
-              display: true,
-              text: 'LTR ($)',
-              color: '#64748b',
-              font: { family: "'DM Sans', sans-serif", size: 12 }
-            }
-          }
-        }
-      }
-    }
+  STATE.charts.winRate = new Chart(
+    document.getElementById('winRateChart'),
+    createChartConfig('line', labels, winRateDatasets, 'Win Rate (%)', true)
   );
 }
 
