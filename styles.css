@@ -644,7 +644,7 @@ body {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 24px;
 }
 
@@ -787,17 +787,6 @@ body {
 .summary-neutral {
   color: #d97706;
   font-weight: 600;
-}
-
-/* Full Width Charts Grid */
-.charts-grid-full {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-}
-
-.chart-card-full {
-  max-width: 100%;
 }
 
 /* Hiring Charts Grid */
