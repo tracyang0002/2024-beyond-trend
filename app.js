@@ -163,6 +163,7 @@ WITH base_data AS (
     AND tsp.current_stage_name IN ('Closed Won', 'Closed Lost')
     AND tsp.is_qualified = TRUE
     AND tsp.close_date >= '2024-01-01'
+    AND tsp.close_date < '2026-01-01'
     AND tsp.owner_line_of_business NOT IN ('Ads', 'Lending')
     AND tsp.owner_team NOT LIKE '%CSM%'
 ),
