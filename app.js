@@ -68,14 +68,14 @@ WITH final as (
     CONCAT('Q', EXTRACT(quarter FROM tsp.close_date)) as quarter,
     SUM(tsp.closed_won_lifetime_total_revenue) as CW_LTR_sum,
     SUM(tsp.closed_won_opportunity_count) as CW_cnt_sum,
-    SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN 1 ELSE 0 END) as closed_deal_cnt,
+    SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') AND tsp.is_qualified = TRUE THEN 1 ELSE 0 END) as closed_deal_cnt,
     COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END) as rep_distinct,
     SUM(tsp.closed_won_lifetime_total_revenue_target) as target_revenue,
     -- Calculated metrics
     SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END)) as deals_per_rep,
     SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_opportunity_count)) as deal_size,
     SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_lifetime_total_revenue_target)) * 100 as attainment_pct,
-    SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN 1 ELSE 0 END)) * 100 as win_rate_pct
+    SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') AND tsp.is_qualified = TRUE THEN 1 ELSE 0 END)) * 100 as win_rate_pct
   FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
   LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
   LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
