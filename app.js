@@ -13,6 +13,7 @@ const STATE = {
   activeTab: 'revenue',
   // Revenue tab state
   data: [],
+  mixAdjustedData: [], // Mix-adjusted win rate data
   selectedTeams: [], // Array for multi-select (empty = all)
   allTeams: [], // All available teams
   charts: {
@@ -20,6 +21,7 @@ const STATE = {
     dealSize: null,
     attainment: null,
     winRate: null,
+    mixAdjustedWinRate: null,
     actualsVsTargets: null
   },
   // Hiring tab state
@@ -127,6 +129,112 @@ GROUP BY ALL
 ORDER BY cohort, tenure_quarter_num
 `;
 
+// Mix-Adjusted Win Rate Query
+const MIX_ADJUSTED_WIN_RATE_QUERY = `
+WITH base_data AS (
+  SELECT
+    tsp.opportunity_id,
+    tsp.close_date,
+    tsp.is_won,
+    tsp.current_stage_name,
+    tsp.is_qualified,
+    tsp.owner_region as region,
+    COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) AS total_gmv,
+    CASE
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 5000000 THEN '0-5M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 10000000 THEN '5-10M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 15000000 THEN '10-15M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 20000000 THEN '15-20M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 25000000 THEN '20-25M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 30000000 THEN '25-30M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 40000000 THEN '30-40M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 50000000 THEN '40-50M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 75000000 THEN '50-75M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 100000000 THEN '75-100M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 150000000 THEN '100-150M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 200000000 THEN '150-200M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 300000000 THEN '200-300M'
+      ELSE '300M+'
+    END AS gmv_segment,
+    EXTRACT(YEAR FROM tsp.close_date) AS close_year,
+    EXTRACT(QUARTER FROM tsp.close_date) AS close_quarter
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
+  WHERE tsp.close_date IS NOT NULL
+    AND tsp.current_stage_name IN ('Closed Won', 'Closed Lost')
+    AND tsp.is_qualified = TRUE
+    AND tsp.close_date >= '2024-01-01'
+    AND tsp.owner_line_of_business NOT IN ('Ads', 'Lending')
+    AND tsp.owner_team NOT LIKE '%CSM%'
+),
+
+conversion_by_region_segment AS (
+  SELECT
+    close_year,
+    close_quarter,
+    region,
+    gmv_segment,
+    COUNT(DISTINCT opportunity_id) AS total_closed,
+    COUNT(DISTINCT CASE WHEN is_won = TRUE THEN opportunity_id END) AS total_won,
+    SAFE_DIVIDE(
+      COUNT(DISTINCT CASE WHEN is_won = TRUE THEN opportunity_id END),
+      COUNT(DISTINCT opportunity_id)
+    ) AS conversion_rate
+  FROM base_data
+  GROUP BY close_year, close_quarter, region, gmv_segment
+),
+
+q4_2025_mix_global AS (
+  SELECT
+    gmv_segment,
+    COUNT(DISTINCT opportunity_id) AS segment_count,
+    SAFE_DIVIDE(
+      COUNT(DISTINCT opportunity_id),
+      SUM(COUNT(DISTINCT opportunity_id)) OVER ()
+    ) AS q4_2025_global_mix_pct
+  FROM base_data
+  WHERE close_year = 2025 AND close_quarter = 4
+  GROUP BY gmv_segment
+),
+
+combined_metrics AS (
+  SELECT
+    c.close_year,
+    c.close_quarter,
+    c.region,
+    c.gmv_segment,
+    c.conversion_rate,
+    c.total_closed,
+    c.total_won,
+    COALESCE(g.q4_2025_global_mix_pct, 0) AS q4_2025_global_mix_pct
+  FROM conversion_by_region_segment c
+  LEFT JOIN q4_2025_mix_global g ON c.gmv_segment = g.gmv_segment
+),
+
+region_totals AS (
+  SELECT
+    close_year,
+    close_quarter,
+    region,
+    SAFE_DIVIDE(SUM(total_won), SUM(total_closed)) AS unadjusted_conv,
+    SUM(conversion_rate * q4_2025_global_mix_pct) AS mix_adjusted_conv,
+    SUM(total_closed) AS total_closed,
+    SUM(total_won) AS total_won
+  FROM combined_metrics
+  GROUP BY close_year, close_quarter, region
+)
+
+SELECT
+  close_year as year,
+  CONCAT('Q', close_quarter) as quarter,
+  region as owner_region,
+  total_closed,
+  total_won,
+  ROUND(unadjusted_conv * 100, 1) AS unadjusted_win_rate_pct,
+  ROUND(mix_adjusted_conv * 100, 1) AS mix_adjusted_win_rate_pct
+FROM region_totals
+ORDER BY close_year, close_quarter, region
+`;
+
 // ============================================================================
 // DOM Elements
 // ============================================================================
@@ -219,8 +327,14 @@ async function loadData() {
   setLoading(true);
   
   try {
-    const result = await quick.dw.querySync(BQ_QUERY);
-    STATE.data = result.results || [];
+    // Load both queries in parallel
+    const [mainResult, mixAdjustedResult] = await Promise.all([
+      quick.dw.querySync(BQ_QUERY),
+      quick.dw.querySync(MIX_ADJUSTED_WIN_RATE_QUERY)
+    ]);
+    
+    STATE.data = mainResult.results || [];
+    STATE.mixAdjustedData = mixAdjustedResult.results || [];
     
     if (STATE.data.length === 0) {
       showEmptyState();
@@ -372,6 +486,52 @@ function aggregateByQuarter(data) {
     regionData.closed_deal_cnt += row.closed_deal_cnt || 0;
     regionData.rep_distinct += row.rep_distinct || 0;
     regionData.target_revenue += row.target_revenue || 0;
+  });
+  
+  // Sort by year and quarter
+  return [...quarterMap.entries()]
+    .sort((a, b) => {
+      const [aYear, aQ] = a[0].split('-');
+      const [bYear, bQ] = b[0].split('-');
+      return aYear - bYear || aQ.localeCompare(bQ);
+    })
+    .map(([key, value]) => value);
+}
+
+function aggregateMixAdjustedData(data) {
+  const quarterMap = new Map();
+  
+  data.forEach(row => {
+    const key = `${row.year}-${row.quarter}`;
+    const region = row.owner_region;
+    
+    // Only include AMER, EMEA, APAC
+    if (!REGIONS.includes(region)) return;
+    
+    if (!quarterMap.has(key)) {
+      quarterMap.set(key, {
+        label: getQuarterLabel(row.year, row.quarter),
+        year: row.year,
+        quarter: row.quarter,
+        regions: new Map()
+      });
+    }
+    
+    const quarterData = quarterMap.get(key);
+    if (!quarterData.regions.has(region)) {
+      quarterData.regions.set(region, {
+        unadjusted_win_rate_pct: null,
+        mix_adjusted_win_rate_pct: null,
+        total_closed: 0,
+        total_won: 0
+      });
+    }
+    
+    const regionData = quarterData.regions.get(region);
+    regionData.unadjusted_win_rate_pct = row.unadjusted_win_rate_pct;
+    regionData.mix_adjusted_win_rate_pct = row.mix_adjusted_win_rate_pct;
+    regionData.total_closed = row.total_closed || 0;
+    regionData.total_won = row.total_won || 0;
   });
   
   // Sort by year and quarter
@@ -563,7 +723,54 @@ function renderCharts() {
     createChartConfig('line', labels, winRateDatasets, 'Win Rate (%)', true)
   );
   
-  // Chart 5: Actuals vs Targets (Total across all regions)
+  // Chart 5: Mix-Adjusted Win Rate
+  const mixAdjustedAggregated = aggregateMixAdjustedData(STATE.mixAdjustedData);
+  const mixAdjustedLabels = mixAdjustedAggregated.map(q => q.label);
+  
+  // Create datasets for both unadjusted and mix-adjusted win rates per region
+  const mixAdjustedDatasets = [];
+  
+  REGIONS.forEach(region => {
+    // Unadjusted line (solid)
+    mixAdjustedDatasets.push({
+      label: `${region} (Unadjusted)`,
+      data: mixAdjustedAggregated.map(q => {
+        const regionData = q.regions.get(region);
+        return regionData ? regionData.unadjusted_win_rate_pct : null;
+      }),
+      borderColor: REGION_COLORS[region],
+      backgroundColor: REGION_COLORS[region] + '33',
+      tension: 0.3,
+      pointRadius: 5,
+      pointHoverRadius: 8,
+      borderWidth: 3,
+      spanGaps: true
+    });
+    
+    // Mix-adjusted line (dashed)
+    mixAdjustedDatasets.push({
+      label: `${region} (Mix-Adjusted)`,
+      data: mixAdjustedAggregated.map(q => {
+        const regionData = q.regions.get(region);
+        return regionData ? regionData.mix_adjusted_win_rate_pct : null;
+      }),
+      borderColor: REGION_COLORS[region],
+      backgroundColor: REGION_COLORS[region] + '33',
+      tension: 0.3,
+      pointRadius: 5,
+      pointHoverRadius: 8,
+      borderWidth: 3,
+      borderDash: [5, 5], // Dashed line for mix-adjusted
+      spanGaps: true
+    });
+  });
+  
+  STATE.charts.mixAdjustedWinRate = new Chart(
+    document.getElementById('mixAdjustedWinRateChart'),
+    createChartConfig('line', mixAdjustedLabels, mixAdjustedDatasets, 'Win Rate (%)', true)
+  );
+  
+  // Chart 6: Actuals vs Targets (Total across all regions)
   const totalActualsData = aggregatedForAttainment.map(q => {
     let total = 0;
     q.regions.forEach(regionData => {
