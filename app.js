@@ -723,44 +723,48 @@ function renderCharts() {
     createChartConfig('line', labels, winRateDatasets, 'Win Rate (%)', true)
   );
   
-  // Chart 5: Mix-Adjusted Win Rate
+  // Chart 5: Mix-Adjusted Win Rate (shows only mix-adjusted since unadjusted is in Chart 4)
   const mixAdjustedAggregated = aggregateMixAdjustedData(STATE.mixAdjustedData);
   const mixAdjustedLabels = mixAdjustedAggregated.map(q => q.label);
   
-  // Create datasets for both unadjusted and mix-adjusted win rates per region
+  // Debug: Log first few rows to verify data
+  console.log('Mix-adjusted data sample:', STATE.mixAdjustedData.slice(0, 5));
+  console.log('Aggregated mix-adjusted:', mixAdjustedAggregated.slice(0, 2));
+  
+  // Create datasets showing both unadjusted (solid) and mix-adjusted (dashed) for comparison
   const mixAdjustedDatasets = [];
   
   REGIONS.forEach(region => {
-    // Unadjusted line (solid)
+    // Unadjusted line (solid, thinner)
     mixAdjustedDatasets.push({
-      label: `${region} (Unadjusted)`,
+      label: `${region} Unadjusted`,
       data: mixAdjustedAggregated.map(q => {
         const regionData = q.regions.get(region);
         return regionData ? regionData.unadjusted_win_rate_pct : null;
       }),
       borderColor: REGION_COLORS[region],
-      backgroundColor: REGION_COLORS[region] + '33',
+      backgroundColor: 'transparent',
       tension: 0.3,
-      pointRadius: 5,
-      pointHoverRadius: 8,
-      borderWidth: 3,
+      pointRadius: 3,
+      pointHoverRadius: 6,
+      borderWidth: 2,
       spanGaps: true
     });
     
-    // Mix-adjusted line (dashed)
+    // Mix-adjusted line (dashed, thicker)
     mixAdjustedDatasets.push({
-      label: `${region} (Mix-Adjusted)`,
+      label: `${region} Mix-Adj`,
       data: mixAdjustedAggregated.map(q => {
         const regionData = q.regions.get(region);
         return regionData ? regionData.mix_adjusted_win_rate_pct : null;
       }),
       borderColor: REGION_COLORS[region],
-      backgroundColor: REGION_COLORS[region] + '33',
+      backgroundColor: REGION_COLORS[region] + '22',
       tension: 0.3,
       pointRadius: 5,
       pointHoverRadius: 8,
       borderWidth: 3,
-      borderDash: [5, 5], // Dashed line for mix-adjusted
+      borderDash: [8, 4], // Dashed line for mix-adjusted
       spanGaps: true
     });
   });
