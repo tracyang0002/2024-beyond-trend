@@ -542,6 +542,7 @@ function createChartConfig(type, labels, datasets, yAxisLabel, isPercentage = fa
           ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
         },
         y: {
+          min: 0,
           grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
           ticks: {
             color: '#475569',
@@ -789,6 +790,7 @@ function renderCharts() {
             ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
           },
           y: {
+            min: 0,
             grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
             ticks: {
               color: '#475569',
