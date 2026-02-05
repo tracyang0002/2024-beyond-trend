@@ -802,6 +802,16 @@ body {
   height: 400px;
 }
 
+/* Full Width Charts Grid */
+.charts-grid-full {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.chart-card-full {
+  width: 100%;
+}
+
 /* Placeholder Content */
 .placeholder-card {
   min-height: 400px;

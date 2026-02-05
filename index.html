@@ -45,6 +45,10 @@
         <span class="tab-icon">👥</span>
         Hiring Cohort Analysis
       </button>
+      <button class="tab-btn" data-tab="tenure" id="tabTenure">
+        <span class="tab-icon">📊</span>
+        Tenure Analysis
+      </button>
     </nav>
 
     <!-- ==================== TAB 1: Revenue Analytics ==================== -->
@@ -262,6 +266,90 @@
         <div class="empty-icon">👥</div>
         <h3>No Hiring Data Available</h3>
         <p>No data found for the selected filters. Try adjusting your selection.</p>
+      </div>
+    </div>
+
+    <!-- ==================== TAB 3: Tenure Analysis ==================== -->
+    <div class="tab-content" id="tenureTab">
+      <!-- Methodology Note -->
+      <section class="info-section">
+        <div class="info-card">
+          <div class="info-header">
+            <span class="info-icon">ℹ️</span>
+            <h3>Methodology Note</h3>
+          </div>
+          <p class="info-text">
+            Tenure is calculated as the difference between the rep's Shopify start date and the attainment date. 
+            Buckets: &lt;6 months, 6-12 months (includes 12 months), 1-2 years, 2-3 years, 3+ years.
+          </p>
+        </div>
+      </section>
+
+      <!-- Controls Section for Tenure -->
+      <section class="controls-section">
+        <div class="controls-grid">
+          <!-- Refresh Button -->
+          <div class="filter-group">
+            <label class="filter-label">&nbsp;</label>
+            <button class="refresh-btn" id="refreshTenureBtn" disabled>
+              <span class="refresh-icon">↻</span>
+              Refresh Data
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Loading State for Tenure -->
+      <div class="loading-overlay" id="tenureLoadingOverlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading tenure analysis data...</p>
+      </div>
+
+      <!-- Tenure Charts Section -->
+      <section class="charts-section" id="tenureChartsSection">
+        <div class="charts-grid">
+          <!-- Chart 1: Attainment % by Tenure Bucket -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3 class="chart-title">Attainment % by Tenure</h3>
+              <p class="chart-subtitle">Actuals / Targets by tenure bucket per quarter</p>
+            </div>
+            <div class="chart-container">
+              <canvas id="tenureAttainmentChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 2: LTR per Rep by Tenure Bucket -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3 class="chart-title">LTR per Rep by Tenure</h3>
+              <p class="chart-subtitle">Total LTR / # Reps by tenure bucket per quarter</p>
+            </div>
+            <div class="chart-container">
+              <canvas id="tenureLtrChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Full Width Chart: Rep Mix by Tenure -->
+        <div class="charts-grid-full" style="margin-top: 24px;">
+          <div class="chart-card chart-card-full">
+            <div class="chart-header">
+              <h3 class="chart-title">Rep Mix by Tenure</h3>
+              <p class="chart-subtitle"># and % of reps by tenure bucket per quarter</p>
+            </div>
+            <div class="chart-container chart-container-wide">
+              <canvas id="tenureMixChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State for Tenure -->
+      <div class="empty-state" id="tenureEmptyState" style="display: none;">
+        <div class="empty-icon">📊</div>
+        <h3>No Tenure Data Available</h3>
+        <p>No data found for tenure analysis. Please try refreshing the data.</p>
       </div>
     </div>
 

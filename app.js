@@ -29,6 +29,13 @@ const STATE = {
   allHiringRegions: [], // All available regions
   hiringCharts: {
     cohortAttainment: null
+  },
+  // Tenure tab state
+  tenureData: [],
+  tenureCharts: {
+    attainment: null,
+    ltr: null,
+    mix: null
   }
 };
 
@@ -269,6 +276,133 @@ GROUP BY ALL
 ORDER BY cohort, tenure_quarter_num
 `;
 
+// Tenure Analysis Query
+const TENURE_BQ_QUERY = `
+-- Get all reps with their tenure (not tied to specific metrics)
+WITH all_reps AS (
+  SELECT DISTINCT
+    user_id,
+    shopify_start_date,
+    month_date,
+    DATE_DIFF(month_date, shopify_start_date, MONTH) AS tenure_months,
+    EXTRACT(YEAR FROM month_date) AS year,
+    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
+  WHERE shopify_start_date IS NOT NULL
+    AND month_date >= '2024-01-01'
+    AND DATE_DIFF(month_date, shopify_start_date, MONTH) >= 0
+),
+
+-- Add tenure bucket to all reps
+all_reps_bucketed AS (
+  SELECT 
+    *,
+    CASE
+      WHEN tenure_months < 6 THEN '<6 months'
+      WHEN tenure_months <= 12 THEN '6-12 months'
+      WHEN tenure_months <= 24 THEN '1-2 years'
+      WHEN tenure_months <= 36 THEN '2-3 years'
+      ELSE '3+ years'
+    END AS tenure_bucket,
+    CASE
+      WHEN tenure_months < 6 THEN 1
+      WHEN tenure_months <= 12 THEN 2
+      WHEN tenure_months <= 24 THEN 3
+      WHEN tenure_months <= 36 THEN 4
+      ELSE 5
+    END AS tenure_bucket_order
+  FROM all_reps
+),
+
+-- Rep counts by quarter and tenure bucket (independent of revenue metrics)
+rep_counts AS (
+  SELECT
+    year,
+    quarter,
+    tenure_bucket,
+    tenure_bucket_order,
+    COUNT(DISTINCT user_id) AS rep_count
+  FROM all_reps_bucketed
+  GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
+),
+
+-- Get LTR data for attainment and LTR per rep calculations
+ltr_data AS (
+  SELECT 
+    user_id,
+    shopify_start_date,
+    month_date,
+    metric,
+    value,
+    DATE_DIFF(month_date, shopify_start_date, MONTH) AS tenure_months,
+    EXTRACT(YEAR FROM month_date) AS year,
+    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
+  WHERE shopify_start_date IS NOT NULL
+    AND month_date >= '2024-01-01'
+    AND DATE_DIFF(month_date, shopify_start_date, MONTH) >= 0
+    AND metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
+),
+
+-- Add tenure bucket to LTR data
+ltr_bucketed AS (
+  SELECT 
+    *,
+    CASE
+      WHEN tenure_months < 6 THEN '<6 months'
+      WHEN tenure_months <= 12 THEN '6-12 months'
+      WHEN tenure_months <= 24 THEN '1-2 years'
+      WHEN tenure_months <= 36 THEN '2-3 years'
+      ELSE '3+ years'
+    END AS tenure_bucket,
+    CASE
+      WHEN tenure_months < 6 THEN 1
+      WHEN tenure_months <= 12 THEN 2
+      WHEN tenure_months <= 24 THEN 3
+      WHEN tenure_months <= 36 THEN 4
+      ELSE 5
+    END AS tenure_bucket_order
+  FROM ltr_data
+),
+
+-- Aggregate LTR metrics
+ltr_agg AS (
+  SELECT 
+    year,
+    quarter,
+    tenure_bucket,
+    tenure_bucket_order,
+    -- Attainment % = SUM(Actuals) / SUM(Targets) * 100
+    SAFE_DIVIDE(
+      SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END),
+      SUM(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END)
+    ) * 100 AS attainment_pct,
+    -- Total LTR for calculating LTR per rep
+    SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS total_ltr
+  FROM ltr_bucketed
+  GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
+)
+
+-- Join rep counts with LTR metrics
+SELECT 
+  rc.year,
+  rc.quarter,
+  CONCAT(CAST(rc.year AS STRING), ' ', rc.quarter) AS quarter_label,
+  rc.tenure_bucket,
+  rc.tenure_bucket_order,
+  la.attainment_pct,
+  -- LTR per Rep = Total LTR / # Reps (from rep_counts, not LTR data)
+  SAFE_DIVIDE(la.total_ltr, rc.rep_count) AS ltr_per_rep,
+  rc.rep_count
+FROM rep_counts rc
+LEFT JOIN ltr_agg la 
+  ON rc.year = la.year 
+  AND rc.quarter = la.quarter 
+  AND rc.tenure_bucket = la.tenure_bucket
+WHERE rc.rep_count > 0
+ORDER BY rc.year, rc.quarter, rc.tenure_bucket_order
+`;
+
 // ============================================================================
 // DOM Elements
 // ============================================================================
@@ -282,8 +416,10 @@ const elements = {
   // Tab Navigation
   tabRevenue: document.getElementById('tabRevenue'),
   tabHiring: document.getElementById('tabHiring'),
+  tabTenure: document.getElementById('tabTenure'),
   revenueTab: document.getElementById('revenueTab'),
   hiringTab: document.getElementById('hiringTab'),
+  tenureTab: document.getElementById('tenureTab'),
   
   // Revenue Tab
   teamFilterBtn: document.getElementById('teamFilterBtn'),
@@ -308,7 +444,13 @@ const elements = {
   hiringChartsSection: document.getElementById('hiringChartsSection'),
   hiringEmptyState: document.getElementById('hiringEmptyState'),
   hiringSummarySection: document.getElementById('hiringSummarySection'),
-  hiringSummaryContent: document.getElementById('hiringSummaryContent')
+  hiringSummaryContent: document.getElementById('hiringSummaryContent'),
+  
+  // Tenure Tab
+  refreshTenureBtn: document.getElementById('refreshTenureBtn'),
+  tenureLoadingOverlay: document.getElementById('tenureLoadingOverlay'),
+  tenureChartsSection: document.getElementById('tenureChartsSection'),
+  tenureEmptyState: document.getElementById('tenureEmptyState')
 };
 
 // ============================================================================
@@ -1138,6 +1280,343 @@ function renderHiringCharts() {
 }
 
 // ============================================================================
+// Tenure Analysis Functions
+// ============================================================================
+
+async function loadTenureData() {
+  if (!STATE.isAuthenticated) return;
+  
+  STATE.isLoading = true;
+  showTenureLoading(true);
+  
+  try {
+    const result = await quick.dw.querySync(TENURE_BQ_QUERY);
+    STATE.tenureData = result.results || [];
+    
+    if (STATE.tenureData.length > 0) {
+      renderTenureCharts();
+      elements.tenureChartsSection.style.display = 'block';
+      elements.tenureEmptyState.style.display = 'none';
+      elements.refreshTenureBtn.disabled = false;
+    } else {
+      elements.tenureChartsSection.style.display = 'none';
+      elements.tenureEmptyState.style.display = 'flex';
+    }
+  } catch (error) {
+    console.error('Failed to load tenure data:', error);
+    elements.tenureChartsSection.style.display = 'none';
+    elements.tenureEmptyState.style.display = 'flex';
+    elements.tenureEmptyState.querySelector('h3').textContent = 'Query Error';
+    elements.tenureEmptyState.querySelector('p').textContent = `Error: ${error.message || 'Failed to load tenure analysis data.'}`;
+  } finally {
+    STATE.isLoading = false;
+    showTenureLoading(false);
+  }
+}
+
+function showTenureLoading(show) {
+  if (show) {
+    elements.tenureLoadingOverlay.classList.add('visible');
+    elements.tenureChartsSection.style.display = 'none';
+  } else {
+    elements.tenureLoadingOverlay.classList.remove('visible');
+  }
+}
+
+// Tenure bucket colors
+const TENURE_COLORS = {
+  '<6 months': 'rgb(239, 68, 68)',      // Red
+  '6-12 months': 'rgb(245, 158, 11)',   // Amber
+  '1-2 years': 'rgb(59, 130, 246)',     // Blue
+  '2-3 years': 'rgb(16, 185, 129)',     // Emerald
+  '3+ years': 'rgb(139, 92, 246)'       // Purple
+};
+
+const TENURE_BUCKETS = ['<6 months', '6-12 months', '1-2 years', '2-3 years', '3+ years'];
+
+function aggregateTenureData(data) {
+  // Group by quarter_label
+  const quarterMap = new Map();
+  
+  data.forEach(row => {
+    const key = row.quarter_label;
+    
+    if (!quarterMap.has(key)) {
+      quarterMap.set(key, {
+        label: key,
+        year: row.year,
+        quarter: row.quarter,
+        buckets: new Map()
+      });
+    }
+    
+    const quarterData = quarterMap.get(key);
+    quarterData.buckets.set(row.tenure_bucket, {
+      attainment_pct: row.attainment_pct,
+      ltr_per_rep: row.ltr_per_rep,
+      rep_count: row.rep_count,
+      order: row.tenure_bucket_order
+    });
+  });
+  
+  // Sort by year and quarter
+  return [...quarterMap.entries()]
+    .sort((a, b) => {
+      return a[1].year - b[1].year || a[1].quarter.localeCompare(b[1].quarter);
+    })
+    .map(([key, value]) => value);
+}
+
+function renderTenureCharts() {
+  const aggregated = aggregateTenureData(STATE.tenureData);
+  const labels = aggregated.map(q => q.label);
+  
+  // Destroy existing charts
+  Object.values(STATE.tenureCharts).forEach(chart => {
+    if (chart) chart.destroy();
+  });
+  
+  // Chart 1: Attainment % by Tenure Bucket (SUM Actuals / SUM Targets)
+  const attainmentDatasets = TENURE_BUCKETS.map(bucket => ({
+    label: bucket,
+    data: aggregated.map(q => {
+      const bucketData = q.buckets.get(bucket);
+      return bucketData ? bucketData.attainment_pct : null;
+    }),
+    borderColor: TENURE_COLORS[bucket],
+    backgroundColor: TENURE_COLORS[bucket] + '33',
+    tension: 0.3,
+    pointRadius: 5,
+    pointHoverRadius: 8,
+    borderWidth: 3,
+    spanGaps: true
+  }));
+  
+  STATE.tenureCharts.attainment = new Chart(
+    document.getElementById('tenureAttainmentChart'),
+    {
+      type: 'line',
+      data: { labels, datasets: attainmentDatasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#475569',
+              font: { family: "'DM Sans', sans-serif", size: 11 },
+              boxWidth: 12,
+              padding: 15,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            titleColor: '#1e293b',
+            bodyColor: '#475569',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            padding: 12,
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(1)}%`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
+          },
+          y: {
+            min: 0,
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: {
+              color: '#475569',
+              font: { family: "'JetBrains Mono', monospace", size: 11 },
+              callback: value => value + '%'
+            },
+            title: {
+              display: true,
+              text: 'Attainment (%)',
+              color: '#64748b',
+              font: { family: "'DM Sans', sans-serif", size: 12 }
+            }
+          }
+        }
+      }
+    }
+  );
+  
+  // Chart 2: LTR per Rep by Tenure Bucket (SUM Actuals / COUNT reps)
+  const ltrDatasets = TENURE_BUCKETS.map(bucket => ({
+    label: bucket,
+    data: aggregated.map(q => {
+      const bucketData = q.buckets.get(bucket);
+      return bucketData ? bucketData.ltr_per_rep : null;
+    }),
+    borderColor: TENURE_COLORS[bucket],
+    backgroundColor: TENURE_COLORS[bucket] + '33',
+    tension: 0.3,
+    pointRadius: 5,
+    pointHoverRadius: 8,
+    borderWidth: 3,
+    spanGaps: true
+  }));
+  
+  STATE.tenureCharts.ltr = new Chart(
+    document.getElementById('tenureLtrChart'),
+    {
+      type: 'line',
+      data: { labels, datasets: ltrDatasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#475569',
+              font: { family: "'DM Sans', sans-serif", size: 11 },
+              boxWidth: 12,
+              padding: 15,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            titleColor: '#1e293b',
+            bodyColor: '#475569',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            padding: 12,
+            callbacks: {
+              label: ctx => {
+                const val = ctx.parsed.y;
+                if (val >= 1000000) return `${ctx.dataset.label}: $${(val / 1000000).toFixed(2)}M`;
+                if (val >= 1000) return `${ctx.dataset.label}: $${(val / 1000).toFixed(1)}K`;
+                return `${ctx.dataset.label}: $${val?.toFixed(0)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
+          },
+          y: {
+            min: 0,
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: {
+              color: '#475569',
+              font: { family: "'JetBrains Mono', monospace", size: 11 },
+              callback: value => {
+                if (value >= 1000000) return '$' + (value / 1000000).toFixed(1) + 'M';
+                if (value >= 1000) return '$' + (value / 1000).toFixed(0) + 'K';
+                return '$' + value;
+              }
+            },
+            title: {
+              display: true,
+              text: 'LTR per Rep ($)',
+              color: '#64748b',
+              font: { family: "'DM Sans', sans-serif", size: 12 }
+            }
+          }
+        }
+      }
+    }
+  );
+  
+  // Chart 3: Rep Mix by Tenure (Stacked Bar)
+  // Calculate totals for percentages
+  const totalsByQuarter = aggregated.map(q => {
+    let total = 0;
+    q.buckets.forEach(b => { total += b.rep_count || 0; });
+    return total;
+  });
+  
+  const mixDatasets = TENURE_BUCKETS.map(bucket => ({
+    label: bucket,
+    data: aggregated.map((q, idx) => {
+      const bucketData = q.buckets.get(bucket);
+      return bucketData ? bucketData.rep_count : 0;
+    }),
+    backgroundColor: TENURE_COLORS[bucket],
+    borderColor: TENURE_COLORS[bucket],
+    borderWidth: 1
+  }));
+  
+  STATE.tenureCharts.mix = new Chart(
+    document.getElementById('tenureMixChart'),
+    {
+      type: 'bar',
+      data: { labels, datasets: mixDatasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#475569',
+              font: { family: "'DM Sans', sans-serif", size: 11 },
+              boxWidth: 12,
+              padding: 15
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            titleColor: '#1e293b',
+            bodyColor: '#475569',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            padding: 12,
+            callbacks: {
+              label: ctx => {
+                const val = ctx.parsed.y;
+                const total = totalsByQuarter[ctx.dataIndex];
+                const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+                return `${ctx.dataset.label}: ${val} reps (${pct}%)`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            grid: { display: false },
+            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
+          },
+          y: {
+            stacked: true,
+            min: 0,
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: {
+              color: '#475569',
+              font: { family: "'JetBrains Mono', monospace", size: 11 }
+            },
+            title: {
+              display: true,
+              text: '# of Reps',
+              color: '#64748b',
+              font: { family: "'DM Sans', sans-serif", size: 12 }
+            }
+          }
+        }
+      }
+    }
+  );
+}
+
+// ============================================================================
 // Event Listeners
 // ============================================================================
 
@@ -1145,16 +1624,21 @@ function switchTab(tabName) {
   // Update tab buttons
   elements.tabRevenue.classList.toggle('active', tabName === 'revenue');
   elements.tabHiring.classList.toggle('active', tabName === 'hiring');
+  elements.tabTenure.classList.toggle('active', tabName === 'tenure');
   
   // Update tab content
   elements.revenueTab.classList.toggle('active', tabName === 'revenue');
   elements.hiringTab.classList.toggle('active', tabName === 'hiring');
+  elements.tenureTab.classList.toggle('active', tabName === 'tenure');
   
   STATE.activeTab = tabName;
   
   // Load data for the tab if not already loaded
   if (tabName === 'hiring' && STATE.hiringData.length === 0 && STATE.isAuthenticated) {
     loadHiringData();
+  }
+  if (tabName === 'tenure' && STATE.tenureData.length === 0 && STATE.isAuthenticated) {
+    loadTenureData();
   }
 }
 
@@ -1165,6 +1649,7 @@ function initEventListeners() {
   // Tab navigation
   elements.tabRevenue.addEventListener('click', () => switchTab('revenue'));
   elements.tabHiring.addEventListener('click', () => switchTab('hiring'));
+  elements.tabTenure.addEventListener('click', () => switchTab('tenure'));
   
   // ============ Team Multi-Select (Revenue tab) ============
   
@@ -1309,6 +1794,9 @@ function initEventListeners() {
   
   // Refresh button (Hiring tab)
   elements.refreshHiringBtn.addEventListener('click', loadHiringData);
+  
+  // Refresh button (Tenure tab)
+  elements.refreshTenureBtn.addEventListener('click', loadTenureData);
   
   // Close dropdowns when clicking outside
   document.addEventListener('click', closeAllDropdowns);
