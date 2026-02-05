@@ -101,7 +101,7 @@ q4_2025_mix AS (
   WHERE year = 2025 AND quarter = 'Q4'
     AND current_stage_name IN ('Closed Won', 'Closed Lost')
     AND is_qualified = TRUE
-    AND owner_segment NOT IN ('SMB', 'Core')
+    AND team_restated NOT IN ('D2C SMB Acquisition', 'Retail SMB Acquisition', 'D2C Retail SMB Cross-Sell')
   GROUP BY gmv_segment
 ),
 
@@ -120,7 +120,7 @@ conversion_by_segment AS (
   FROM base_data
   WHERE current_stage_name IN ('Closed Won', 'Closed Lost')
     AND is_qualified = TRUE
-    AND owner_segment NOT IN ('SMB', 'Core')
+    AND team_restated NOT IN ('D2C SMB Acquisition', 'Retail SMB Acquisition', 'D2C Retail SMB Cross-Sell')
   GROUP BY owner_region, team_restated, year, quarter, gmv_segment
 ),
 
