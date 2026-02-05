@@ -131,6 +131,9 @@ WITH base_data AS (
   WHERE tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
     AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
     AND tsp.owner_team NOT LIKE '%CSM%'
+    AND tsp.owner_team NOT IN ('Sales Incubation', 'Launch', 'Partner', 'Unknown', 'D2C Mid-Mkt Cross-Sell', 'D2C Large Cross-Sell')
+    AND tsp.owner_role_function NOT IN ('Customer Success')
+    AND (tsp.owner_user_role NOT LIKE '%INC%' OR tsp.owner_user_role IS NULL)
 ),
 
 -- Q4 2025 global GMV mix (non-SMB only)
