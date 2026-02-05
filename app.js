@@ -166,6 +166,7 @@ WITH base_data AS (
     AND tsp.close_date < '2026-01-01'
     AND tsp.owner_line_of_business NOT IN ('Ads', 'Lending')
     AND tsp.owner_team NOT LIKE '%CSM%'
+    AND tsp.owner_segment NOT IN ('SMB', 'Core')
 ),
 
 conversion_by_region_segment AS (
