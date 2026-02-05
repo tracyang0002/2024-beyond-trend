@@ -277,24 +277,28 @@ ORDER BY cohort, tenure_quarter_num
 `;
 
 // Tenure Analysis Query
+// Uses END of quarter tenure to avoid double-counting reps who cross bucket boundaries mid-quarter
 const TENURE_BQ_QUERY = `
--- Get all reps with their tenure (not tied to specific metrics)
-WITH all_reps AS (
-  SELECT DISTINCT
+-- Get each rep's tenure at the END of each quarter (last month they appear in that quarter)
+WITH rep_quarter_tenure AS (
+  SELECT 
     user_id,
     shopify_start_date,
-    month_date,
-    DATE_DIFF(month_date, shopify_start_date, MONTH) AS tenure_months,
     EXTRACT(YEAR FROM month_date) AS year,
-    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter
+    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter,
+    -- Use the MAX month_date in the quarter to get end-of-quarter tenure
+    MAX(month_date) AS quarter_end_month,
+    -- Tenure at the end of the quarter
+    MAX(DATE_DIFF(month_date, shopify_start_date, MONTH)) AS tenure_months
   FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
   WHERE shopify_start_date IS NOT NULL
     AND month_date >= '2024-01-01'
     AND DATE_DIFF(month_date, shopify_start_date, MONTH) >= 0
+  GROUP BY user_id, shopify_start_date, year, quarter
 ),
 
--- Add tenure bucket to all reps
-all_reps_bucketed AS (
+-- Add tenure bucket based on end-of-quarter tenure
+rep_tenure_bucketed AS (
   SELECT 
     *,
     CASE
@@ -311,10 +315,10 @@ all_reps_bucketed AS (
       WHEN tenure_months <= 36 THEN 4
       ELSE 5
     END AS tenure_bucket_order
-  FROM all_reps
+  FROM rep_quarter_tenure
 ),
 
--- Rep counts by quarter and tenure bucket (independent of revenue metrics)
+-- Rep counts by quarter and tenure bucket (each rep counted exactly once per quarter)
 rep_counts AS (
   SELECT
     year,
@@ -322,50 +326,30 @@ rep_counts AS (
     tenure_bucket,
     tenure_bucket_order,
     COUNT(DISTINCT user_id) AS rep_count
-  FROM all_reps_bucketed
+  FROM rep_tenure_bucketed
   GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
 ),
 
--- Get LTR data for attainment and LTR per rep calculations
-ltr_data AS (
+-- Get LTR data and join with rep tenure buckets
+ltr_with_tenure AS (
   SELECT 
-    user_id,
-    shopify_start_date,
-    month_date,
-    metric,
-    value,
-    DATE_DIFF(month_date, shopify_start_date, MONTH) AS tenure_months,
-    EXTRACT(YEAR FROM month_date) AS year,
-    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter
-  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
-  WHERE shopify_start_date IS NOT NULL
-    AND month_date >= '2024-01-01'
-    AND DATE_DIFF(month_date, shopify_start_date, MONTH) >= 0
-    AND metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
+    s.user_id,
+    s.metric,
+    s.value,
+    r.year,
+    r.quarter,
+    r.tenure_bucket,
+    r.tenure_bucket_order
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\` s
+  INNER JOIN rep_tenure_bucketed r
+    ON s.user_id = r.user_id
+    AND EXTRACT(YEAR FROM s.month_date) = r.year
+    AND CONCAT('Q', EXTRACT(QUARTER FROM s.month_date)) = r.quarter
+  WHERE s.metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
+    AND s.month_date >= '2024-01-01'
 ),
 
--- Add tenure bucket to LTR data
-ltr_bucketed AS (
-  SELECT 
-    *,
-    CASE
-      WHEN tenure_months < 6 THEN '<6 months'
-      WHEN tenure_months <= 12 THEN '6-12 months'
-      WHEN tenure_months <= 24 THEN '1-2 years'
-      WHEN tenure_months <= 36 THEN '2-3 years'
-      ELSE '3+ years'
-    END AS tenure_bucket,
-    CASE
-      WHEN tenure_months < 6 THEN 1
-      WHEN tenure_months <= 12 THEN 2
-      WHEN tenure_months <= 24 THEN 3
-      WHEN tenure_months <= 36 THEN 4
-      ELSE 5
-    END AS tenure_bucket_order
-  FROM ltr_data
-),
-
--- Aggregate LTR metrics
+-- Aggregate LTR metrics by tenure bucket
 ltr_agg AS (
   SELECT 
     year,
@@ -379,7 +363,7 @@ ltr_agg AS (
     ) * 100 AS attainment_pct,
     -- Total LTR for calculating LTR per rep
     SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS total_ltr
-  FROM ltr_bucketed
+  FROM ltr_with_tenure
   GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
 )
 
@@ -391,7 +375,7 @@ SELECT
   rc.tenure_bucket,
   rc.tenure_bucket_order,
   la.attainment_pct,
-  -- LTR per Rep = Total LTR / # Reps (from rep_counts, not LTR data)
+  -- LTR per Rep = Total LTR / # Reps
   SAFE_DIVIDE(la.total_ltr, rc.rep_count) AS ltr_per_rep,
   rc.rep_count
 FROM rep_counts rc
