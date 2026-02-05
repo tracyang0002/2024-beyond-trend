@@ -140,28 +140,6 @@
               <canvas id="attainmentChart"></canvas>
             </div>
           </div>
-
-          <!-- Chart 4: Mix-Adjusted Win Rate -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <h3 class="chart-title">Win Rate % (Mix-Adjusted, Non-SMB)</h3>
-              <p class="chart-subtitle">Excludes SMB teams; adjusted to Q4'25 GMV mix</p>
-            </div>
-            <div class="chart-container">
-              <canvas id="mixAdjustedWinRateChart"></canvas>
-            </div>
-          </div>
-
-          <!-- Chart 5: Win Rate -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <h3 class="chart-title">Win Rate %</h3>
-              <p class="chart-subtitle">Closed Won / Total Closed (Qualified Only)</p>
-            </div>
-            <div class="chart-container">
-              <canvas id="winRateChart"></canvas>
-            </div>
-          </div>
         </div>
 
         <!-- Full Width Chart: Actuals vs Targets -->
@@ -173,6 +151,48 @@
             </div>
             <div class="chart-container chart-container-wide">
               <canvas id="actualsVsTargetsChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tenure Cuts Section -->
+        <div class="tenure-section">
+          <div class="section-header">
+            <h2 class="section-title">📊 Tenure Cuts</h2>
+            <p class="section-subtitle">Performance by rep tenure at time of deal close</p>
+          </div>
+          <div class="charts-grid">
+            <!-- Chart 1: Attainment by Tenure -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Attainment % by Tenure</h3>
+                <p class="chart-subtitle">Actuals / Targets by rep tenure bucket</p>
+              </div>
+              <div class="chart-container">
+                <canvas id="tenureAttainmentChart"></canvas>
+              </div>
+            </div>
+
+            <!-- Chart 2: Revenue by Tenure -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Total Revenue by Tenure</h3>
+                <p class="chart-subtitle">Closed Won LTR by rep tenure bucket</p>
+              </div>
+              <div class="chart-container">
+                <canvas id="tenureRevenueChart"></canvas>
+              </div>
+            </div>
+
+            <!-- Chart 3: Seller Count by Tenure (Stacked Bar) -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Seller Mix by Quarter</h3>
+                <p class="chart-subtitle"># and % of sellers by tenure bucket</p>
+              </div>
+              <div class="chart-container">
+                <canvas id="tenureMixChart"></canvas>
+              </div>
             </div>
           </div>
         </div>
