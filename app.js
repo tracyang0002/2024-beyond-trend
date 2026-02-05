@@ -13,7 +13,6 @@ const STATE = {
   activeTab: 'revenue',
   // Revenue tab state
   data: [],
-  mixAdjustedData: [], // Mix-adjusted win rate data
   selectedTeams: [], // Array for multi-select (empty = all)
   allTeams: [], // All available teams
   charts: {
@@ -39,8 +38,10 @@ const STATE = {
 // ============================================================================
 
 const BQ_QUERY = `
-WITH final as (
+-- Base data with team_restated and GMV segment
+WITH base_data AS (
   SELECT 
+    tsp.opportunity_id,
     tsp.owner_region,
     CASE
       WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
@@ -59,30 +60,122 @@ WITH final as (
       WHEN ual.estimated_total_annual_revenue_usd > 5000000 THEN 'D2C Retail Mid-Mkt'
       ELSE 'D2C Retail SMB Cross-Sell'
     END as team_restated,
+    tsp.owner_segment,
     EXTRACT(year FROM tsp.close_date) as year,
     CONCAT('Q', EXTRACT(quarter FROM tsp.close_date)) as quarter,
-    SUM(tsp.closed_won_lifetime_total_revenue) as CW_LTR_sum,
-    SUM(tsp.closed_won_opportunity_count) as CW_cnt_sum,
-    SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') AND tsp.is_qualified = TRUE THEN 1 ELSE 0 END) as closed_deal_cnt,
-    COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END) as rep_distinct,
-    SUM(tsp.closed_won_lifetime_total_revenue_target) as target_revenue,
-    -- Calculated metrics
-    SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), COUNT(DISTINCT CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') THEN tsp.salesforce_owner_id END)) as deals_per_rep,
-    SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_opportunity_count)) as deal_size,
-    SAFE_DIVIDE(SUM(tsp.closed_won_lifetime_total_revenue), SUM(tsp.closed_won_lifetime_total_revenue_target)) * 100 as attainment_pct,
-    SAFE_DIVIDE(SUM(tsp.closed_won_opportunity_count), SUM(CASE WHEN tsp.current_stage_name IN ('Closed Won','Closed Lost') AND tsp.is_qualified = TRUE THEN 1 ELSE 0 END)) * 100 as win_rate_pct
+    tsp.close_date,
+    tsp.closed_won_lifetime_total_revenue,
+    tsp.closed_won_opportunity_count,
+    tsp.current_stage_name,
+    tsp.is_qualified,
+    tsp.is_won,
+    tsp.salesforce_owner_id,
+    tsp.closed_won_lifetime_total_revenue_target,
+    -- GMV segment for mix-adjusted calculation
+    CASE
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 5000000 THEN '0-5M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 10000000 THEN '5-10M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 20000000 THEN '10-20M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 40000000 THEN '20-40M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 75000000 THEN '40-75M'
+      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 150000000 THEN '75-150M'
+      ELSE '150M+'
+    END AS gmv_segment
   FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
   LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
   LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
   WHERE tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
     AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
     AND tsp.owner_team NOT LIKE '%CSM%'
-  GROUP BY ALL
+),
+
+-- Q4 2025 global GMV mix (non-SMB only)
+q4_2025_mix AS (
+  SELECT
+    gmv_segment,
+    SAFE_DIVIDE(
+      COUNT(DISTINCT opportunity_id),
+      SUM(COUNT(DISTINCT opportunity_id)) OVER ()
+    ) AS mix_pct
+  FROM base_data
+  WHERE year = 2025 AND quarter = 'Q4'
+    AND current_stage_name IN ('Closed Won', 'Closed Lost')
+    AND is_qualified = TRUE
+    AND owner_segment NOT IN ('SMB', 'Core')
+  GROUP BY gmv_segment
+),
+
+-- Conversion rates by region/quarter/team/GMV segment (non-SMB only)
+conversion_by_segment AS (
+  SELECT
+    owner_region,
+    team_restated,
+    year,
+    quarter,
+    gmv_segment,
+    SAFE_DIVIDE(
+      COUNT(DISTINCT CASE WHEN is_won = TRUE THEN opportunity_id END),
+      COUNT(DISTINCT opportunity_id)
+    ) AS segment_conv_rate
+  FROM base_data
+  WHERE current_stage_name IN ('Closed Won', 'Closed Lost')
+    AND is_qualified = TRUE
+    AND owner_segment NOT IN ('SMB', 'Core')
+  GROUP BY owner_region, team_restated, year, quarter, gmv_segment
+),
+
+-- Mix-adjusted win rate by region/quarter/team
+mix_adjusted AS (
+  SELECT
+    c.owner_region,
+    c.team_restated,
+    c.year,
+    c.quarter,
+    ROUND(SUM(c.segment_conv_rate * COALESCE(m.mix_pct, 0)) * 100, 1) AS mix_adjusted_win_rate_pct
+  FROM conversion_by_segment c
+  LEFT JOIN q4_2025_mix m ON c.gmv_segment = m.gmv_segment
+  GROUP BY c.owner_region, c.team_restated, c.year, c.quarter
+),
+
+-- Main aggregation
+main_agg AS (
+  SELECT 
+    owner_region,
+    team_restated,
+    year,
+    quarter,
+    SUM(closed_won_lifetime_total_revenue) as CW_LTR_sum,
+    SUM(closed_won_opportunity_count) as CW_cnt_sum,
+    SUM(CASE WHEN current_stage_name IN ('Closed Won','Closed Lost') AND is_qualified = TRUE THEN 1 ELSE 0 END) as closed_deal_cnt,
+    COUNT(DISTINCT CASE WHEN current_stage_name IN ('Closed Won','Closed Lost') THEN salesforce_owner_id END) as rep_distinct,
+    SUM(closed_won_lifetime_total_revenue_target) as target_revenue
+  FROM base_data
+  GROUP BY owner_region, team_restated, year, quarter
 )
-SELECT *
-FROM final
-WHERE target_revenue > 0
-ORDER BY owner_region, team_restated, year, quarter
+
+SELECT 
+  m.owner_region,
+  m.team_restated,
+  m.year,
+  m.quarter,
+  m.CW_LTR_sum,
+  m.CW_cnt_sum,
+  m.closed_deal_cnt,
+  m.rep_distinct,
+  m.target_revenue,
+  -- Calculated metrics
+  SAFE_DIVIDE(m.CW_cnt_sum, m.rep_distinct) as deals_per_rep,
+  SAFE_DIVIDE(m.CW_LTR_sum, m.CW_cnt_sum) as deal_size,
+  SAFE_DIVIDE(m.CW_LTR_sum, m.target_revenue) * 100 as attainment_pct,
+  SAFE_DIVIDE(m.CW_cnt_sum, m.closed_deal_cnt) * 100 as win_rate_pct,
+  ma.mix_adjusted_win_rate_pct
+FROM main_agg m
+LEFT JOIN mix_adjusted ma ON m.owner_region = ma.owner_region 
+  AND m.team_restated = ma.team_restated 
+  AND m.year = ma.year 
+  AND m.quarter = ma.quarter
+WHERE m.target_revenue > 0
+ORDER BY m.owner_region, m.team_restated, m.year, m.quarter
 `;
 
 // Hiring Cohort Analysis Query
@@ -127,114 +220,6 @@ WHERE cohort IS NOT NULL
   AND quarter_date >= cohort_start_quarter
 GROUP BY ALL
 ORDER BY cohort, tenure_quarter_num
-`;
-
-// Mix-Adjusted Win Rate Query
-const MIX_ADJUSTED_WIN_RATE_QUERY = `
-WITH base_data AS (
-  SELECT
-    tsp.opportunity_id,
-    tsp.close_date,
-    tsp.is_won,
-    tsp.current_stage_name,
-    tsp.is_qualified,
-    tsp.owner_region as region,
-    COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) AS total_gmv,
-    CASE
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 5000000 THEN '0-5M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 10000000 THEN '5-10M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 15000000 THEN '10-15M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 20000000 THEN '15-20M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 25000000 THEN '20-25M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 30000000 THEN '25-30M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 40000000 THEN '30-40M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 50000000 THEN '40-50M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 75000000 THEN '50-75M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 100000000 THEN '75-100M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 150000000 THEN '100-150M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 200000000 THEN '150-200M'
-      WHEN COALESCE(tsp.committed_d2c_gmv, 0) + COALESCE(tsp.committed_retail_gmv, 0) + COALESCE(tsp.committed_b2b_gmv, 0) < 300000000 THEN '200-300M'
-      ELSE '300M+'
-    END AS gmv_segment,
-    EXTRACT(YEAR FROM tsp.close_date) AS close_year,
-    EXTRACT(QUARTER FROM tsp.close_date) AS close_quarter
-  FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
-  WHERE tsp.close_date IS NOT NULL
-    AND tsp.current_stage_name IN ('Closed Won', 'Closed Lost')
-    AND tsp.is_qualified = TRUE
-    AND tsp.close_date >= '2024-01-01'
-    AND tsp.close_date < '2026-01-01'
-    AND tsp.owner_line_of_business NOT IN ('Ads', 'Lending')
-    AND tsp.owner_team NOT LIKE '%CSM%'
-    AND tsp.owner_segment NOT IN ('SMB', 'Core')
-),
-
-conversion_by_region_segment AS (
-  SELECT
-    close_year,
-    close_quarter,
-    region,
-    gmv_segment,
-    COUNT(DISTINCT opportunity_id) AS total_closed,
-    COUNT(DISTINCT CASE WHEN is_won = TRUE THEN opportunity_id END) AS total_won,
-    SAFE_DIVIDE(
-      COUNT(DISTINCT CASE WHEN is_won = TRUE THEN opportunity_id END),
-      COUNT(DISTINCT opportunity_id)
-    ) AS conversion_rate
-  FROM base_data
-  GROUP BY close_year, close_quarter, region, gmv_segment
-),
-
-q4_2025_mix_global AS (
-  SELECT
-    gmv_segment,
-    COUNT(DISTINCT opportunity_id) AS segment_count,
-    SAFE_DIVIDE(
-      COUNT(DISTINCT opportunity_id),
-      SUM(COUNT(DISTINCT opportunity_id)) OVER ()
-    ) AS q4_2025_global_mix_pct
-  FROM base_data
-  WHERE close_year = 2025 AND close_quarter = 4
-  GROUP BY gmv_segment
-),
-
-combined_metrics AS (
-  SELECT
-    c.close_year,
-    c.close_quarter,
-    c.region,
-    c.gmv_segment,
-    c.conversion_rate,
-    c.total_closed,
-    c.total_won,
-    COALESCE(g.q4_2025_global_mix_pct, 0) AS q4_2025_global_mix_pct
-  FROM conversion_by_region_segment c
-  LEFT JOIN q4_2025_mix_global g ON c.gmv_segment = g.gmv_segment
-),
-
-region_totals AS (
-  SELECT
-    close_year,
-    close_quarter,
-    region,
-    SAFE_DIVIDE(SUM(total_won), SUM(total_closed)) AS unadjusted_conv,
-    SUM(conversion_rate * q4_2025_global_mix_pct) AS mix_adjusted_conv,
-    SUM(total_closed) AS total_closed,
-    SUM(total_won) AS total_won
-  FROM combined_metrics
-  GROUP BY close_year, close_quarter, region
-)
-
-SELECT
-  close_year as year,
-  CONCAT('Q', close_quarter) as quarter,
-  region as owner_region,
-  total_closed,
-  total_won,
-  ROUND(unadjusted_conv * 100, 1) AS unadjusted_win_rate_pct,
-  ROUND(mix_adjusted_conv * 100, 1) AS mix_adjusted_win_rate_pct
-FROM region_totals
-ORDER BY close_year, close_quarter, region
 `;
 
 // ============================================================================
@@ -329,14 +314,8 @@ async function loadData() {
   setLoading(true);
   
   try {
-    // Load both queries in parallel
-    const [mainResult, mixAdjustedResult] = await Promise.all([
-      quick.dw.querySync(BQ_QUERY),
-      quick.dw.querySync(MIX_ADJUSTED_WIN_RATE_QUERY)
-    ]);
-    
-    STATE.data = mainResult.results || [];
-    STATE.mixAdjustedData = mixAdjustedResult.results || [];
+    const result = await quick.dw.querySync(BQ_QUERY);
+    STATE.data = result.results || [];
     
     if (STATE.data.length === 0) {
       showEmptyState();
@@ -478,7 +457,10 @@ function aggregateByQuarter(data) {
         CW_LTR_sum: 0,
         closed_deal_cnt: 0,
         rep_distinct: 0,
-        target_revenue: 0
+        target_revenue: 0,
+        // For weighted mix-adjusted win rate
+        mix_adjusted_weighted_sum: 0,
+        mix_adjusted_weight: 0
       });
     }
     
@@ -488,52 +470,11 @@ function aggregateByQuarter(data) {
     regionData.closed_deal_cnt += row.closed_deal_cnt || 0;
     regionData.rep_distinct += row.rep_distinct || 0;
     regionData.target_revenue += row.target_revenue || 0;
-  });
-  
-  // Sort by year and quarter
-  return [...quarterMap.entries()]
-    .sort((a, b) => {
-      const [aYear, aQ] = a[0].split('-');
-      const [bYear, bQ] = b[0].split('-');
-      return aYear - bYear || aQ.localeCompare(bQ);
-    })
-    .map(([key, value]) => value);
-}
-
-function aggregateMixAdjustedData(data) {
-  const quarterMap = new Map();
-  
-  data.forEach(row => {
-    const key = `${row.year}-${row.quarter}`;
-    const region = row.owner_region;
-    
-    // Only include AMER, EMEA, APAC
-    if (!REGIONS.includes(region)) return;
-    
-    if (!quarterMap.has(key)) {
-      quarterMap.set(key, {
-        label: getQuarterLabel(row.year, row.quarter),
-        year: row.year,
-        quarter: row.quarter,
-        regions: new Map()
-      });
+    // Weighted average for mix-adjusted (weight by closed deals)
+    if (row.mix_adjusted_win_rate_pct && row.closed_deal_cnt) {
+      regionData.mix_adjusted_weighted_sum += row.mix_adjusted_win_rate_pct * row.closed_deal_cnt;
+      regionData.mix_adjusted_weight += row.closed_deal_cnt;
     }
-    
-    const quarterData = quarterMap.get(key);
-    if (!quarterData.regions.has(region)) {
-      quarterData.regions.set(region, {
-        unadjusted_win_rate_pct: null,
-        mix_adjusted_win_rate_pct: null,
-        total_closed: 0,
-        total_won: 0
-      });
-    }
-    
-    const regionData = quarterData.regions.get(region);
-    regionData.unadjusted_win_rate_pct = row.unadjusted_win_rate_pct;
-    regionData.mix_adjusted_win_rate_pct = row.mix_adjusted_win_rate_pct;
-    regionData.total_closed = row.total_closed || 0;
-    regionData.total_won = row.total_won || 0;
   });
   
   // Sort by year and quarter
@@ -725,16 +666,18 @@ function renderCharts() {
     createChartConfig('line', labels, winRateDatasets, 'Win Rate (%)', true)
   );
   
-  // Chart 5: Mix-Adjusted Win Rate (controls for GMV mix changes using Q4'25 baseline)
-  const mixAdjustedAggregated = aggregateMixAdjustedData(STATE.mixAdjustedData);
+  // Chart 5: Mix-Adjusted Win Rate (uses same filtered data, excludes 2026 Q1)
+  // Filter to exclude 2026 Q1 for mix-adjusted chart
+  const mixAdjustedAggregated = aggregated.filter(q => !(q.year === 2026 && q.quarter === 'Q1'));
   const mixAdjustedLabels = mixAdjustedAggregated.map(q => q.label);
   
-  // Show only mix-adjusted lines (unadjusted is already in Chart 4)
+  // Show mix-adjusted win rate (weighted average across selected teams)
   const mixAdjustedDatasets = REGIONS.map(region => ({
     label: region,
     data: mixAdjustedAggregated.map(q => {
       const regionData = q.regions.get(region);
-      return regionData ? regionData.mix_adjusted_win_rate_pct : null;
+      if (!regionData || regionData.mix_adjusted_weight === 0) return null;
+      return regionData.mix_adjusted_weighted_sum / regionData.mix_adjusted_weight;
     }),
     borderColor: REGION_COLORS[region],
     backgroundColor: REGION_COLORS[region] + '33',
