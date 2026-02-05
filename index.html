@@ -274,6 +274,52 @@
       <!-- Controls Section for Tenure -->
       <section class="controls-section">
         <div class="controls-grid">
+          <!-- Team Filter -->
+          <div class="filter-group">
+            <label class="filter-label">Team</label>
+            <div class="multi-select" id="tenureTeamFilterContainer">
+              <button class="multi-select-btn" id="tenureTeamFilterBtn" disabled>
+                <span class="multi-select-text">All Teams</span>
+                <span class="multi-select-arrow">▾</span>
+              </button>
+              <div class="multi-select-dropdown" id="tenureTeamFilterDropdown">
+                <div class="multi-select-search">
+                  <input type="text" placeholder="Search teams..." id="tenureTeamFilterSearch">
+                </div>
+                <div class="multi-select-options" id="tenureTeamFilterOptions">
+                  <!-- Options populated by JS -->
+                </div>
+                <div class="multi-select-actions">
+                  <button class="multi-select-action" id="tenureTeamSelectAll">Select All</button>
+                  <button class="multi-select-action" id="tenureTeamClearAll">Clear All</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Region Filter -->
+          <div class="filter-group">
+            <label class="filter-label">Region</label>
+            <div class="multi-select" id="tenureRegionFilterContainer">
+              <button class="multi-select-btn" id="tenureRegionFilterBtn" disabled>
+                <span class="multi-select-text">All Regions</span>
+                <span class="multi-select-arrow">▾</span>
+              </button>
+              <div class="multi-select-dropdown" id="tenureRegionFilterDropdown">
+                <div class="multi-select-search">
+                  <input type="text" placeholder="Search regions..." id="tenureRegionFilterSearch">
+                </div>
+                <div class="multi-select-options" id="tenureRegionFilterOptions">
+                  <!-- Options populated by JS -->
+                </div>
+                <div class="multi-select-actions">
+                  <button class="multi-select-action" id="tenureRegionSelectAll">Select All</button>
+                  <button class="multi-select-action" id="tenureRegionClearAll">Clear All</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Refresh Button -->
           <div class="filter-group">
             <label class="filter-label">&nbsp;</label>

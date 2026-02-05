@@ -32,6 +32,11 @@ const STATE = {
   },
   // Tenure tab state
   tenureData: [],
+  tenureRawData: [], // Raw data before aggregation (for filtering)
+  selectedTenureTeams: [], // Array for multi-select (empty = all)
+  allTenureTeams: [], // All available teams
+  selectedTenureRegions: [], // Array for multi-select (empty = all)
+  allTenureRegions: [], // All available regions
   tenureCharts: {
     attainment: null,
     ltr: null,
@@ -277,114 +282,137 @@ ORDER BY cohort, tenure_quarter_num
 `;
 
 // Tenure Analysis Query
+// Returns per-user data with vault_team and region for client-side filtering
 // Uses END of quarter tenure to avoid double-counting reps who cross bucket boundaries mid-quarter
 const TENURE_BQ_QUERY = `
--- Get each rep's tenure at the END of each quarter (last month they appear in that quarter)
-WITH rep_quarter_tenure AS (
+-- Tenure from modelled_rep_scorecard (shopify_start_date, in months)
+-- Active status from worker_daily_snapshot (is_active_end at quarter end)
+WITH quarter_end_dates AS (
+  SELECT year, quarter, quarter_end_date
+  FROM UNNEST([
+    STRUCT(2024 AS year, 'Q1' AS quarter, DATE('2024-03-31') AS quarter_end_date),
+    STRUCT(2024, 'Q2', DATE('2024-06-30')),
+    STRUCT(2024, 'Q3', DATE('2024-09-30')),
+    STRUCT(2024, 'Q4', DATE('2024-12-31')),
+    STRUCT(2025, 'Q1', DATE('2025-03-31')),
+    STRUCT(2025, 'Q2', DATE('2025-06-30')),
+    STRUCT(2025, 'Q3', DATE('2025-09-30')),
+    STRUCT(2025, 'Q4', DATE('2025-12-31')),
+    STRUCT(2026, 'Q1', DATE('2026-03-31')),
+    STRUCT(2026, 'Q2', DATE('2026-06-30'))
+  ])
+  WHERE quarter_end_date < CURRENT_DATE()
+),
+
+-- Map Salesforce user_id to Workday worker_id via sales_users
+user_mapping AS (
+  SELECT user_id AS sf_user_id, CAST(employee_number AS STRING) AS worker_id
+  FROM \`shopify-dw.sales.sales_users\`
+  WHERE employee_number IS NOT NULL
+),
+
+-- Get active workers at end of each quarter from worker_daily_snapshot
+active_workers_at_quarter_end AS (
+  SELECT
+    w.worker_id,
+    q.year,
+    q.quarter
+  FROM quarter_end_dates q
+  JOIN \`shopify-dw.people.worker_daily_snapshot\` w
+    ON DATE(w.effective_on) = q.quarter_end_date
+  WHERE w.is_active_end = TRUE
+),
+
+-- Get rep info and tenure from modelled_rep_scorecard
+rep_info AS (
+  SELECT DISTINCT
+    user_id,
+    vault_team,
+    region
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
+  WHERE month_date >= '2024-01-01'
+),
+
+-- Calculate tenure at end of each quarter (in MONTHS from shopify_start_date)
+rep_quarter_tenure AS (
   SELECT 
     user_id,
     shopify_start_date,
     EXTRACT(YEAR FROM month_date) AS year,
     CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter,
-    -- Use the MAX month_date in the quarter to get end-of-quarter tenure
     MAX(month_date) AS quarter_end_month,
-    -- Tenure at the end of the quarter
     MAX(DATE_DIFF(month_date, shopify_start_date, MONTH)) AS tenure_months
   FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
   WHERE shopify_start_date IS NOT NULL
     AND month_date >= '2024-01-01'
     AND DATE_DIFF(month_date, shopify_start_date, MONTH) >= 0
+    AND month_date < DATE_TRUNC(CURRENT_DATE(), QUARTER)
   GROUP BY user_id, shopify_start_date, year, quarter
 ),
 
--- Add tenure bucket based on end-of-quarter tenure
+-- Create tenure buckets (in months)
 rep_tenure_bucketed AS (
   SELECT 
-    *,
+    r.*,
+    i.vault_team,
+    i.region,
     CASE
-      WHEN tenure_months < 6 THEN '<6 months'
-      WHEN tenure_months <= 12 THEN '6-12 months'
-      WHEN tenure_months <= 24 THEN '1-2 years'
-      WHEN tenure_months <= 36 THEN '2-3 years'
+      WHEN r.tenure_months < 6 THEN '<6 months'
+      WHEN r.tenure_months <= 12 THEN '6-12 months'
+      WHEN r.tenure_months <= 24 THEN '1-2 years'
+      WHEN r.tenure_months <= 36 THEN '2-3 years'
       ELSE '3+ years'
     END AS tenure_bucket,
     CASE
-      WHEN tenure_months < 6 THEN 1
-      WHEN tenure_months <= 12 THEN 2
-      WHEN tenure_months <= 24 THEN 3
-      WHEN tenure_months <= 36 THEN 4
+      WHEN r.tenure_months < 6 THEN 1
+      WHEN r.tenure_months <= 12 THEN 2
+      WHEN r.tenure_months <= 24 THEN 3
+      WHEN r.tenure_months <= 36 THEN 4
       ELSE 5
     END AS tenure_bucket_order
-  FROM rep_quarter_tenure
+  FROM rep_quarter_tenure r
+  LEFT JOIN rep_info i ON r.user_id = i.user_id
 ),
 
--- Rep counts by quarter and tenure bucket (each rep counted exactly once per quarter)
-rep_counts AS (
-  SELECT
-    year,
-    quarter,
-    tenure_bucket,
-    tenure_bucket_order,
-    COUNT(DISTINCT user_id) AS rep_count
-  FROM rep_tenure_bucketed
-  GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
-),
-
--- Get LTR data and join with rep tenure buckets
-ltr_with_tenure AS (
+-- Get LTR data per user per quarter
+ltr_per_user AS (
   SELECT 
-    s.user_id,
-    s.metric,
-    s.value,
-    r.year,
-    r.quarter,
-    r.tenure_bucket,
-    r.tenure_bucket_order
-  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\` s
-  INNER JOIN rep_tenure_bucketed r
-    ON s.user_id = r.user_id
-    AND EXTRACT(YEAR FROM s.month_date) = r.year
-    AND CONCAT('Q', EXTRACT(QUARTER FROM s.month_date)) = r.quarter
-  WHERE s.metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
-    AND s.month_date >= '2024-01-01'
-),
-
--- Aggregate LTR metrics by tenure bucket
-ltr_agg AS (
-  SELECT 
-    year,
-    quarter,
-    tenure_bucket,
-    tenure_bucket_order,
-    -- Attainment % = SUM(Actuals) / SUM(Targets) * 100
-    SAFE_DIVIDE(
-      SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END),
-      SUM(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END)
-    ) * 100 AS attainment_pct,
-    -- Total LTR for calculating LTR per rep
-    SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS total_ltr
-  FROM ltr_with_tenure
-  GROUP BY year, quarter, tenure_bucket, tenure_bucket_order
+    user_id,
+    EXTRACT(YEAR FROM month_date) AS year,
+    CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter,
+    SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS ltr_actuals,
+    SUM(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END) AS ltr_targets
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
+  WHERE metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
+    AND month_date >= '2024-01-01'
+    AND month_date < DATE_TRUNC(CURRENT_DATE(), QUARTER)
+  GROUP BY user_id, year, quarter
 )
 
--- Join rep counts with LTR metrics
+-- Join all together, filtering for active workers only
 SELECT 
-  rc.year,
-  rc.quarter,
-  CONCAT(CAST(rc.year AS STRING), ' ', rc.quarter) AS quarter_label,
-  rc.tenure_bucket,
-  rc.tenure_bucket_order,
-  la.attainment_pct,
-  -- LTR per Rep = Total LTR / # Reps
-  SAFE_DIVIDE(la.total_ltr, rc.rep_count) AS ltr_per_rep,
-  rc.rep_count
-FROM rep_counts rc
-LEFT JOIN ltr_agg la 
-  ON rc.year = la.year 
-  AND rc.quarter = la.quarter 
-  AND rc.tenure_bucket = la.tenure_bucket
-WHERE rc.rep_count > 0
-ORDER BY rc.year, rc.quarter, rc.tenure_bucket_order
+  r.user_id,
+  r.year,
+  r.quarter,
+  CONCAT(CAST(r.year AS STRING), ' ', r.quarter) AS quarter_label,
+  r.vault_team,
+  r.region,
+  r.tenure_bucket,
+  r.tenure_bucket_order,
+  COALESCE(l.ltr_actuals, 0) AS ltr_actuals,
+  COALESCE(l.ltr_targets, 0) AS ltr_targets
+FROM rep_tenure_bucketed r
+LEFT JOIN ltr_per_user l 
+  ON r.user_id = l.user_id 
+  AND r.year = l.year 
+  AND r.quarter = l.quarter
+-- Filter for active workers only via worker_daily_snapshot
+INNER JOIN user_mapping m ON r.user_id = m.sf_user_id
+INNER JOIN active_workers_at_quarter_end a 
+  ON m.worker_id = a.worker_id 
+  AND r.year = a.year 
+  AND r.quarter = a.quarter
+ORDER BY r.year, r.quarter, r.tenure_bucket_order, r.user_id
 `;
 
 // ============================================================================
@@ -431,6 +459,18 @@ const elements = {
   hiringSummaryContent: document.getElementById('hiringSummaryContent'),
   
   // Tenure Tab
+  tenureTeamFilterBtn: document.getElementById('tenureTeamFilterBtn'),
+  tenureTeamFilterDropdown: document.getElementById('tenureTeamFilterDropdown'),
+  tenureTeamFilterOptions: document.getElementById('tenureTeamFilterOptions'),
+  tenureTeamFilterSearch: document.getElementById('tenureTeamFilterSearch'),
+  tenureTeamSelectAll: document.getElementById('tenureTeamSelectAll'),
+  tenureTeamClearAll: document.getElementById('tenureTeamClearAll'),
+  tenureRegionFilterBtn: document.getElementById('tenureRegionFilterBtn'),
+  tenureRegionFilterDropdown: document.getElementById('tenureRegionFilterDropdown'),
+  tenureRegionFilterOptions: document.getElementById('tenureRegionFilterOptions'),
+  tenureRegionFilterSearch: document.getElementById('tenureRegionFilterSearch'),
+  tenureRegionSelectAll: document.getElementById('tenureRegionSelectAll'),
+  tenureRegionClearAll: document.getElementById('tenureRegionClearAll'),
   refreshTenureBtn: document.getElementById('refreshTenureBtn'),
   tenureLoadingOverlay: document.getElementById('tenureLoadingOverlay'),
   tenureChartsSection: document.getElementById('tenureChartsSection'),
@@ -1275,13 +1315,20 @@ async function loadTenureData() {
   
   try {
     const result = await quick.dw.querySync(TENURE_BQ_QUERY);
-    STATE.tenureData = result.results || [];
+    STATE.tenureRawData = result.results || [];
     
-    if (STATE.tenureData.length > 0) {
-      renderTenureCharts();
+    if (STATE.tenureRawData.length > 0) {
+      // Populate filter dropdowns
+      populateTenureFilters();
+      
+      // Aggregate and render
+      aggregateAndRenderTenure();
+      
       elements.tenureChartsSection.style.display = 'block';
       elements.tenureEmptyState.style.display = 'none';
       elements.refreshTenureBtn.disabled = false;
+      elements.tenureTeamFilterBtn.disabled = false;
+      elements.tenureRegionFilterBtn.disabled = false;
     } else {
       elements.tenureChartsSection.style.display = 'none';
       elements.tenureEmptyState.style.display = 'flex';
@@ -1296,6 +1343,145 @@ async function loadTenureData() {
     STATE.isLoading = false;
     showTenureLoading(false);
   }
+}
+
+function populateTenureFilters() {
+  // Get unique teams and regions
+  const teams = [...new Set(STATE.tenureRawData.map(d => d.vault_team).filter(Boolean))].sort();
+  const regions = [...new Set(STATE.tenureRawData.map(d => d.region).filter(Boolean))].sort();
+  
+  STATE.allTenureTeams = teams;
+  STATE.allTenureRegions = regions;
+  STATE.selectedTenureTeams = []; // Empty means all
+  STATE.selectedTenureRegions = []; // Empty means all
+  
+  // Populate team options
+  elements.tenureTeamFilterOptions.innerHTML = teams.map(team => `
+    <div class="multi-select-option selected" data-value="${team}">
+      <span class="multi-select-checkbox"></span>
+      <span class="multi-select-label">${team}</span>
+    </div>
+  `).join('');
+  
+  // Populate region options
+  elements.tenureRegionFilterOptions.innerHTML = regions.map(region => `
+    <div class="multi-select-option selected" data-value="${region}">
+      <span class="multi-select-checkbox"></span>
+      <span class="multi-select-label">${region}</span>
+    </div>
+  `).join('');
+  
+  updateTenureTeamFilterButtonText();
+  updateTenureRegionFilterButtonText();
+}
+
+function updateTenureTeamFilterButtonText() {
+  const btn = elements.tenureTeamFilterBtn;
+  const textSpan = btn.querySelector('.multi-select-text');
+  
+  if (STATE.selectedTenureTeams.length === 0 || STATE.selectedTenureTeams.length === STATE.allTenureTeams.length) {
+    textSpan.textContent = 'All Teams';
+  } else if (STATE.selectedTenureTeams.length === 1) {
+    textSpan.textContent = STATE.selectedTenureTeams[0];
+  } else {
+    textSpan.textContent = `${STATE.selectedTenureTeams.length} teams selected`;
+  }
+}
+
+function updateTenureRegionFilterButtonText() {
+  const btn = elements.tenureRegionFilterBtn;
+  const textSpan = btn.querySelector('.multi-select-text');
+  
+  if (STATE.selectedTenureRegions.length === 0 || STATE.selectedTenureRegions.length === STATE.allTenureRegions.length) {
+    textSpan.textContent = 'All Regions';
+  } else if (STATE.selectedTenureRegions.length === 1) {
+    textSpan.textContent = STATE.selectedTenureRegions[0];
+  } else {
+    textSpan.textContent = `${STATE.selectedTenureRegions.length} regions selected`;
+  }
+}
+
+function getFilteredTenureData() {
+  let filtered = STATE.tenureRawData;
+  
+  // Apply team filter
+  if (STATE.selectedTenureTeams.length > 0 && STATE.selectedTenureTeams.length < STATE.allTenureTeams.length) {
+    filtered = filtered.filter(d => STATE.selectedTenureTeams.includes(d.vault_team));
+  }
+  
+  // Apply region filter
+  if (STATE.selectedTenureRegions.length > 0 && STATE.selectedTenureRegions.length < STATE.allTenureRegions.length) {
+    filtered = filtered.filter(d => STATE.selectedTenureRegions.includes(d.region));
+  }
+  
+  return filtered;
+}
+
+function aggregateRawTenureData(rawData) {
+  // Group by quarter and tenure bucket, then aggregate user-level data
+  const grouped = {};
+  
+  rawData.forEach(row => {
+    const key = `${row.year}-${row.quarter}-${row.tenure_bucket}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        year: row.year,
+        quarter: row.quarter,
+        quarter_label: row.quarter_label,
+        tenure_bucket: row.tenure_bucket,
+        tenure_bucket_order: row.tenure_bucket_order,
+        ltr_actuals: 0,
+        ltr_targets: 0,
+        rep_count: 0,
+        user_ids: new Set()
+      };
+    }
+    grouped[key].ltr_actuals += (row.ltr_actuals || 0);
+    grouped[key].ltr_targets += (row.ltr_targets || 0);
+    grouped[key].user_ids.add(row.user_id);
+  });
+  
+  // Convert to array and calculate metrics
+  return Object.values(grouped).map(g => ({
+    year: g.year,
+    quarter: g.quarter,
+    quarter_label: g.quarter_label,
+    tenure_bucket: g.tenure_bucket,
+    tenure_bucket_order: g.tenure_bucket_order,
+    attainment_pct: g.ltr_targets > 0 ? (g.ltr_actuals / g.ltr_targets) * 100 : null,
+    ltr_per_rep: g.user_ids.size > 0 ? g.ltr_actuals / g.user_ids.size : 0,
+    rep_count: g.user_ids.size
+  })).sort((a, b) => {
+    if (a.year !== b.year) return a.year - b.year;
+    if (a.quarter !== b.quarter) return a.quarter.localeCompare(b.quarter);
+    return a.tenure_bucket_order - b.tenure_bucket_order;
+  });
+}
+
+function aggregateAndRenderTenure() {
+  const filteredData = getFilteredTenureData();
+  STATE.tenureData = aggregateRawTenureData(filteredData);
+  
+  if (STATE.tenureData.length > 0) {
+    renderTenureCharts();
+    elements.tenureChartsSection.style.display = 'block';
+    elements.tenureEmptyState.style.display = 'none';
+  } else {
+    elements.tenureChartsSection.style.display = 'none';
+    elements.tenureEmptyState.style.display = 'flex';
+  }
+}
+
+function updateTenureTeamSelection() {
+  const selectedOptions = elements.tenureTeamFilterOptions.querySelectorAll('.multi-select-option.selected');
+  STATE.selectedTenureTeams = Array.from(selectedOptions).map(opt => opt.dataset.value);
+  updateTenureTeamFilterButtonText();
+}
+
+function updateTenureRegionSelection() {
+  const selectedOptions = elements.tenureRegionFilterOptions.querySelectorAll('.multi-select-option.selected');
+  STATE.selectedTenureRegions = Array.from(selectedOptions).map(opt => opt.dataset.value);
+  updateTenureRegionFilterButtonText();
 }
 
 function showTenureLoading(show) {
@@ -1779,6 +1965,130 @@ function initEventListeners() {
   // Refresh button (Hiring tab)
   elements.refreshHiringBtn.addEventListener('click', loadHiringData);
   
+  // ============ Team Multi-Select (Tenure tab) ============
+  
+  // Toggle dropdown
+  elements.tenureTeamFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = elements.tenureTeamFilterDropdown.classList.contains('open');
+    closeAllDropdowns();
+    if (!isOpen) {
+      elements.tenureTeamFilterDropdown.classList.add('open');
+      elements.tenureTeamFilterBtn.classList.add('active');
+    }
+  });
+  
+  // Prevent dropdown from closing when clicking inside
+  elements.tenureTeamFilterDropdown.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  
+  // Option click
+  elements.tenureTeamFilterOptions.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const option = e.target.closest('.multi-select-option');
+    if (!option) return;
+    
+    option.classList.toggle('selected');
+    updateTenureTeamSelection();
+    aggregateAndRenderTenure();
+  });
+  
+  // Search filter
+  elements.tenureTeamFilterSearch.addEventListener('input', (e) => {
+    e.stopPropagation();
+    const searchTerm = e.target.value.toLowerCase();
+    const options = elements.tenureTeamFilterOptions.querySelectorAll('.multi-select-option');
+    options.forEach(opt => {
+      const label = opt.querySelector('.multi-select-label').textContent.toLowerCase();
+      opt.classList.toggle('hidden', !label.includes(searchTerm));
+    });
+  });
+  
+  // Select All
+  elements.tenureTeamSelectAll.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.tenureTeamFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+      if (!opt.classList.contains('hidden')) {
+        opt.classList.add('selected');
+      }
+    });
+    updateTenureTeamSelection();
+    aggregateAndRenderTenure();
+  });
+  
+  // Clear All
+  elements.tenureTeamClearAll.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.tenureTeamFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+      opt.classList.remove('selected');
+    });
+    updateTenureTeamSelection();
+    aggregateAndRenderTenure();
+  });
+  
+  // ============ Region Multi-Select (Tenure tab) ============
+  
+  // Toggle dropdown
+  elements.tenureRegionFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = elements.tenureRegionFilterDropdown.classList.contains('open');
+    closeAllDropdowns();
+    if (!isOpen) {
+      elements.tenureRegionFilterDropdown.classList.add('open');
+      elements.tenureRegionFilterBtn.classList.add('active');
+    }
+  });
+  
+  // Prevent dropdown from closing when clicking inside
+  elements.tenureRegionFilterDropdown.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  
+  // Option click
+  elements.tenureRegionFilterOptions.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const option = e.target.closest('.multi-select-option');
+    if (!option) return;
+    
+    option.classList.toggle('selected');
+    updateTenureRegionSelection();
+    aggregateAndRenderTenure();
+  });
+  
+  // Search filter
+  elements.tenureRegionFilterSearch.addEventListener('input', (e) => {
+    e.stopPropagation();
+    const searchTerm = e.target.value.toLowerCase();
+    const options = elements.tenureRegionFilterOptions.querySelectorAll('.multi-select-option');
+    options.forEach(opt => {
+      const label = opt.querySelector('.multi-select-label').textContent.toLowerCase();
+      opt.classList.toggle('hidden', !label.includes(searchTerm));
+    });
+  });
+  
+  // Select All
+  elements.tenureRegionSelectAll.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.tenureRegionFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+      if (!opt.classList.contains('hidden')) {
+        opt.classList.add('selected');
+      }
+    });
+    updateTenureRegionSelection();
+    aggregateAndRenderTenure();
+  });
+  
+  // Clear All
+  elements.tenureRegionClearAll.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.tenureRegionFilterOptions.querySelectorAll('.multi-select-option').forEach(opt => {
+      opt.classList.remove('selected');
+    });
+    updateTenureRegionSelection();
+    aggregateAndRenderTenure();
+  });
+  
   // Refresh button (Tenure tab)
   elements.refreshTenureBtn.addEventListener('click', loadTenureData);
   
@@ -1791,6 +2101,10 @@ function closeAllDropdowns() {
   elements.teamFilterBtn.classList.remove('active');
   elements.hiringRegionFilterDropdown.classList.remove('open');
   elements.hiringRegionFilterBtn.classList.remove('active');
+  elements.tenureTeamFilterDropdown.classList.remove('open');
+  elements.tenureTeamFilterBtn.classList.remove('active');
+  elements.tenureRegionFilterDropdown.classList.remove('open');
+  elements.tenureRegionFilterBtn.classList.remove('active');
 }
 
 function updateSelectedTeams() {
