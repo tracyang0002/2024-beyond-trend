@@ -584,14 +584,17 @@ async function loadData() {
     STATE.data = mainResult.results || [];
     
     // Load January YoY data separately (don't block main charts if this fails)
+    console.log('Starting January YoY data load...');
     try {
       const januaryResult = await quick.dw.querySync(JANUARY_YOY_QUERY);
+      console.log('January query result:', januaryResult);
       STATE.januaryYoyData = januaryResult.results || [];
       console.log('January YoY data loaded:', STATE.januaryYoyData.length, 'rows');
     } catch (janError) {
       console.error('Failed to load January YoY data:', janError);
       STATE.januaryYoyData = [];
     }
+    console.log('January YoY data load complete. STATE.januaryYoyData:', STATE.januaryYoyData.length);
     
     if (STATE.data.length === 0) {
       showEmptyState();
@@ -1090,7 +1093,9 @@ function renderCharts() {
   );
   
   // Chart 7: January Year-over-Year CW Deals
+  console.log('About to render January YoY chart...');
   renderJanuaryYoyChart();
+  console.log('Finished renderCharts()');
 }
 
 function getFilteredJanuaryData() {
