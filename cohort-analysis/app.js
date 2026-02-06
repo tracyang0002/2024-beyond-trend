@@ -1,8 +1,7 @@
 // Cohort Analysis App
 const STATE = {
     chart: null,
-    data: [],
-    xAxisMode: 'tenure' // 'tenure' or 'calendar'
+    data: []
 };
 
 // Cohort colors matching the screenshot style
@@ -149,18 +148,6 @@ async function checkAuth() {
 
 function initEventListeners() {
     document.getElementById('refreshBtn').addEventListener('click', loadData);
-    document.getElementById('tenureBtn').addEventListener('click', () => {
-        STATE.xAxisMode = 'tenure';
-        document.getElementById('tenureBtn').classList.add('active');
-        document.getElementById('calendarBtn').classList.remove('active');
-        renderChart();
-    });
-    document.getElementById('calendarBtn').addEventListener('click', () => {
-        STATE.xAxisMode = 'calendar';
-        document.getElementById('calendarBtn').classList.add('active');
-        document.getElementById('tenureBtn').classList.remove('active');
-        renderChart();
-    });
 }
 
 async function loadData() {
@@ -186,60 +173,30 @@ function renderChart() {
 
     const cohorts = [...new Set(STATE.data.map(d => d.cohort))].sort();
     
-    let labels, datasets;
-    
-    if (STATE.xAxisMode === 'tenure') {
-        // X-axis = tenure quarters (First Quarter, Second Quarter, etc.)
-        labels = ['First Quarter', 'Second Quarter', 'Third Quarter', 'Fourth Quarter'];
-        datasets = cohorts.map(cohort => {
-            const cohortData = STATE.data.filter(d => d.cohort === cohort);
-            const data = labels.map((_, idx) => {
-                const row = cohortData.find(d => d.tenure_quarter === idx + 1);
-                return row ? row.attainment * 100 : null;
-            });
-            const style = COHORT_COLORS[cohort] || { color: '#64748b', dash: [] };
-            return {
-                label: cohort,
-                data: data,
-                borderColor: style.color,
-                backgroundColor: style.color,
-                borderDash: style.dash,
-                borderWidth: style.dash.length ? 2 : 3,
-                pointRadius: 6,
-                pointBackgroundColor: '#0f172a',
-                pointBorderColor: style.color,
-                pointBorderWidth: 2,
-                tension: 0.1,
-                spanGaps: true
-            };
+    // X-axis = tenure quarters (First Quarter, Second Quarter, etc.)
+    const labels = ['First Quarter', 'Second Quarter', 'Third Quarter', 'Fourth Quarter'];
+    const datasets = cohorts.map(cohort => {
+        const cohortData = STATE.data.filter(d => d.cohort === cohort);
+        const data = labels.map((_, idx) => {
+            const row = cohortData.find(d => d.tenure_quarter === idx + 1);
+            return row ? row.attainment * 100 : null;
         });
-    } else {
-        // X-axis = calendar quarters (2024 Q1, 2024 Q2, etc.)
-        const allQuarters = [...new Set(STATE.data.map(d => d.calendar_quarter))].sort();
-        labels = allQuarters;
-        datasets = cohorts.map(cohort => {
-            const cohortData = STATE.data.filter(d => d.cohort === cohort);
-            const data = labels.map(q => {
-                const row = cohortData.find(d => d.calendar_quarter === q);
-                return row ? row.attainment * 100 : null;
-            });
-            const style = COHORT_COLORS[cohort] || { color: '#64748b', dash: [] };
-            return {
-                label: cohort,
-                data: data,
-                borderColor: style.color,
-                backgroundColor: style.color,
-                borderDash: style.dash,
-                borderWidth: style.dash.length ? 2 : 3,
-                pointRadius: 6,
-                pointBackgroundColor: '#0f172a',
-                pointBorderColor: style.color,
-                pointBorderWidth: 2,
-                tension: 0.1,
-                spanGaps: true
-            };
-        });
-    }
+        const style = COHORT_COLORS[cohort] || { color: '#64748b', dash: [] };
+        return {
+            label: cohort,
+            data: data,
+            borderColor: style.color,
+            backgroundColor: style.color,
+            borderDash: style.dash,
+            borderWidth: style.dash.length ? 2 : 3,
+            pointRadius: 6,
+            pointBackgroundColor: '#0f172a',
+            pointBorderColor: style.color,
+            pointBorderWidth: 2,
+            tension: 0.1,
+            spanGaps: true
+        };
+    });
 
     STATE.chart = new Chart(ctx, {
         type: 'line',
