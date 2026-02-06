@@ -57,23 +57,7 @@ WITH base_data AS (
   SELECT 
     tsp.opportunity_id,
     tsp.owner_region,
-    CASE
-      WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
-      WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
-      WHEN tsp.owner_line_of_business = 'B2B' THEN 'B2B Large Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_segment IN ('Mid-Mkt') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_segment IN ('Large') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Large'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
-      WHEN ual.estimated_total_annual_revenue_usd > 40000000 THEN 'D2C Retail Large'
-      WHEN ual.estimated_total_annual_revenue_usd > 5000000 THEN 'D2C Retail Mid-Mkt'
-      ELSE 'D2C Retail SMB Cross-Sell'
-    END as team_restated,
+    tsp.owner_team as team_restated,
     tsp.owner_segment,
     EXTRACT(year FROM tsp.close_date) as year,
     CONCAT('Q', EXTRACT(quarter FROM tsp.close_date)) as quarter,
@@ -140,8 +124,6 @@ WITH base_data AS (
       ELSE '300M+'
     END AS gmv_segment
   FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
-  LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
-  LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
   WHERE tsp.close_date BETWEEN '2024-01-01' AND '2026-03-31'
     AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
     AND tsp.owner_team NOT LIKE '%CSM%'
@@ -240,80 +222,83 @@ ORDER BY m.owner_region, m.team_restated, m.year, m.quarter
 `;
 
 // Hiring Cohort Analysis Query
+// Compares how 2024 vs 2025 cohorts performed in calendar quarters (2025+)
+// Uses modelled_rep_scorecard LTR Actuals/Targets for attainment calculation
+// Each rep counted ONCE per cohort per quarter (deduplicated)
 const HIRING_BQ_QUERY = `
-WITH base_data AS (
+-- First, get unique rep data per quarter (avoid triple-counting monthly rows)
+WITH rep_quarter_data AS (
   SELECT
     region,
+    user_id,
+    shopify_start_date,
+    EXTRACT(YEAR FROM month_date) AS cal_year,
+    EXTRACT(QUARTER FROM month_date) AS cal_qtr,
+    -- Take MAX to deduplicate (same value repeated 3x per quarter)
+    MAX(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS ltr_actuals,
+    MAX(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END) AS ltr_targets
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
+  WHERE shopify_start_date >= '2024-01-01'
+    AND month_date >= '2025-01-01'
+    AND metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
+  GROUP BY region, user_id, shopify_start_date, cal_year, cal_qtr
+),
+
+-- Assign cohorts based on shopify_start_date
+cohort_data AS (
+  SELECT
+    region,
+    user_id,
     CASE 
-      WHEN shopify_start_date BETWEEN '2025-01-01' AND '2025-03-31' THEN 'Q1 Cohort'
-      WHEN shopify_start_date BETWEEN '2025-04-01' AND '2025-06-30' THEN 'Q2 Cohort'
-      WHEN shopify_start_date BETWEEN '2025-07-01' AND '2025-09-30' THEN 'Q3 Cohort'
-      WHEN shopify_start_date BETWEEN '2025-10-01' AND '2025-12-31' THEN 'Q4 Cohort'
+      -- 2024 Cohorts
+      WHEN shopify_start_date BETWEEN '2024-01-01' AND '2024-03-31' THEN '2024 Q1'
+      WHEN shopify_start_date BETWEEN '2024-04-01' AND '2024-06-30' THEN '2024 Q2'
+      WHEN shopify_start_date BETWEEN '2024-07-01' AND '2024-09-30' THEN '2024 Q3'
+      WHEN shopify_start_date BETWEEN '2024-10-01' AND '2024-12-31' THEN '2024 Q4'
+      -- 2025 Cohorts
+      WHEN shopify_start_date BETWEEN '2025-01-01' AND '2025-03-31' THEN '2025 Q1'
+      WHEN shopify_start_date BETWEEN '2025-04-01' AND '2025-06-30' THEN '2025 Q2'
+      WHEN shopify_start_date BETWEEN '2025-07-01' AND '2025-09-30' THEN '2025 Q3'
+      WHEN shopify_start_date BETWEEN '2025-10-01' AND '2025-12-31' THEN '2025 Q4'
       ELSE NULL 
     END AS cohort,
-    CASE 
-      WHEN shopify_start_date BETWEEN '2025-01-01' AND '2025-03-31' THEN DATE('2025-03-31')
-      WHEN shopify_start_date BETWEEN '2025-04-01' AND '2025-06-30' THEN DATE('2025-06-30')
-      WHEN shopify_start_date BETWEEN '2025-07-01' AND '2025-09-30' THEN DATE('2025-09-30')
-      WHEN shopify_start_date BETWEEN '2025-10-01' AND '2025-12-31' THEN DATE('2025-12-31')
-      ELSE NULL 
-    END AS cohort_start_quarter,
-    LAST_DAY(month_date, QUARTER) AS quarter_date,
-    value
-  FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
-  WHERE metric LIKE '%Attainment LTR%'
-    AND shopify_start_date >= '2025-01-01'
+    CONCAT(cal_year, ' Q', cal_qtr) AS calendar_quarter,
+    cal_year,
+    cal_qtr,
+    ltr_actuals,
+    ltr_targets
+  FROM rep_quarter_data
 )
+
 SELECT
   region,
   cohort,
-  CASE DATE_DIFF(quarter_date, cohort_start_quarter, QUARTER) + 1
-    WHEN 1 THEN 'First Quarter'
-    WHEN 2 THEN 'Second Quarter'
-    WHEN 3 THEN 'Third Quarter'
-    WHEN 4 THEN 'Fourth Quarter'
-    ELSE NULL
-  END AS tenure_quarter,
-  DATE_DIFF(quarter_date, cohort_start_quarter, QUARTER) + 1 AS tenure_quarter_num,
-  AVG(value) AS avg_attainment
-FROM base_data
+  calendar_quarter AS tenure_quarter,
+  cal_year * 10 + cal_qtr AS tenure_quarter_num,
+  -- Calculate attainment as SUM(actuals) / SUM(targets) - now each rep counted once
+  SAFE_DIVIDE(
+    SUM(ltr_actuals),
+    NULLIF(SUM(ltr_targets), 0)
+  ) AS avg_attainment
+FROM cohort_data
 WHERE cohort IS NOT NULL
-  AND quarter_date >= cohort_start_quarter
-GROUP BY ALL
+GROUP BY region, cohort, calendar_quarter, cal_year, cal_qtr
+HAVING SUM(ltr_targets) > 0
 ORDER BY cohort, tenure_quarter_num
 `;
 
 // January Year-over-Year Comparison Query
 // Pulls total CW deal count for January of 2024, 2025, and 2026
-// 2024/2025: uses team_restated (calculated), 2026: uses owner_team (raw)
+// Uses owner_team directly as team_restated
 const JANUARY_YOY_QUERY = `
 WITH base_data AS (
   SELECT 
     tsp.opportunity_id,
     tsp.owner_region,
-    tsp.owner_team,
-    CASE
-      WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
-      WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
-      WHEN tsp.owner_line_of_business = 'B2B' THEN 'B2B Large Mid-Mkt Cross-Sell'
-      WHEN tsp.owner_segment IN ('Mid-Mkt') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_segment IN ('Large') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Large'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'D2C Retail SMB Cross-Sell'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
-      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
-      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
-      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
-      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
-      WHEN ual.estimated_total_annual_revenue_usd > 40000000 THEN 'D2C Retail Large'
-      WHEN ual.estimated_total_annual_revenue_usd > 5000000 THEN 'D2C Retail Mid-Mkt'
-      ELSE 'D2C Retail SMB Cross-Sell'
-    END as team_restated,
+    tsp.owner_team as team_restated,
     EXTRACT(year FROM tsp.close_date) as year,
     tsp.closed_won_opportunity_count
   FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
-  LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
-  LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
   WHERE EXTRACT(month FROM tsp.close_date) = 1
     AND EXTRACT(year FROM tsp.close_date) IN (2024, 2025, 2026)
     AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
@@ -324,12 +309,11 @@ WITH base_data AS (
 )
 SELECT 
   owner_region,
-  -- For 2024/2025: use team_restated, For 2026: use owner_team
-  CASE WHEN year = 2026 THEN owner_team ELSE team_restated END as team_restated,
+  team_restated,
   year,
   SUM(closed_won_opportunity_count) as january_cw_deals
 FROM base_data
-GROUP BY owner_region, CASE WHEN year = 2026 THEN owner_team ELSE team_restated END, year
+GROUP BY owner_region, team_restated, year
 ORDER BY owner_region, team_restated, year
 `;
 
@@ -427,13 +411,14 @@ rep_tenure_bucketed AS (
 ),
 
 -- Get LTR data per user per quarter
+-- Get LTR data per user per quarter (use MAX to dedupe monthly rows)
 ltr_per_user AS (
   SELECT 
     user_id,
     EXTRACT(YEAR FROM month_date) AS year,
     CONCAT('Q', EXTRACT(QUARTER FROM month_date)) AS quarter,
-    SUM(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS ltr_actuals,
-    SUM(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END) AS ltr_targets
+    MAX(CASE WHEN metric = '99i. Quarterly LTR Actuals' THEN value END) AS ltr_actuals,
+    MAX(CASE WHEN metric = '99i. Quarterly LTR Targets' THEN value END) AS ltr_targets
   FROM \`sdp-for-analysts-platform.rev_ops_prod.modelled_rep_scorecard\`
   WHERE metric IN ('99i. Quarterly LTR Actuals', '99i. Quarterly LTR Targets')
     AND month_date >= '2024-01-01'
@@ -1336,17 +1321,26 @@ function aggregateHiringByCohort(data) {
   });
   
   // Calculate averages and organize by cohort
-  const cohorts = ['Q1 Cohort', 'Q2 Cohort', 'Q3 Cohort', 'Q4 Cohort'];
-  const tenureQuarters = ['First Quarter', 'Second Quarter', 'Third Quarter', 'Fourth Quarter'];
+  // Include both 2024 and 2025 cohorts
+  const cohorts = ['2024 Q1', '2024 Q2', '2024 Q3', '2024 Q4', '2025 Q1', '2025 Q2', '2025 Q3', '2025 Q4'];
+  // Calendar quarters for x-axis (2025 Q1 through 2026 Q1)
+  // tenure_quarter_num format: year * 10 + quarter (e.g., 20251 = 2025 Q1)
+  const calendarQuarters = [
+    { label: '2025 Q1', num: 20251 },
+    { label: '2025 Q2', num: 20252 },
+    { label: '2025 Q3', num: 20253 },
+    { label: '2025 Q4', num: 20254 },
+    { label: '2026 Q1', num: 20261 }
+  ];
   
   const result = {
-    labels: tenureQuarters,
+    labels: calendarQuarters.map(q => q.label),
     cohorts: {}
   };
   
   cohorts.forEach(cohort => {
-    result.cohorts[cohort] = tenureQuarters.map((tq, idx) => {
-      const key = `${cohort}-${idx + 1}`;
+    result.cohorts[cohort] = calendarQuarters.map(cq => {
+      const key = `${cohort}-${cq.num}`;
       const entry = cohortMap.get(key);
       if (entry && entry.count > 0) {
         return (entry.total_attainment / entry.count) * 100; // Convert to percentage
@@ -1359,32 +1353,33 @@ function aggregateHiringByCohort(data) {
 }
 
 const COHORT_COLORS = {
-  'Q1 Cohort': 'rgb(59, 130, 246)',   // Blue
-  'Q2 Cohort': 'rgb(15, 82, 107)',    // Dark teal
-  'Q3 Cohort': 'rgb(234, 121, 83)',   // Coral/Orange
-  'Q4 Cohort': 'rgb(20, 120, 120)'    // Teal
+  // 2024 Cohorts (muted distinct colors - DASHED lines)
+  '2024 Q1': 'rgb(107, 114, 128)',    // Gray
+  '2024 Q2': 'rgb(185, 28, 28)',      // Dark red
+  '2024 Q3': 'rgb(21, 128, 61)',      // Dark green
+  '2024 Q4': 'rgb(109, 40, 217)',     // Dark violet
+  // 2025 Cohorts (vibrant colors - SOLID lines)
+  '2025 Q1': 'rgb(59, 130, 246)',     // Blue
+  '2025 Q2': 'rgb(16, 185, 129)',     // Emerald
+  '2025 Q3': 'rgb(245, 158, 11)',     // Amber
+  '2025 Q4': 'rgb(236, 72, 153)'      // Pink
 };
 
 function generateHiringSummary(aggregated) {
-  const insights = [
-    {
-      text: `<span class="summary-highlight">Q1 Cohort</span> shows the <span class="summary-negative">weakest performance</span> among all cohorts.`
-    },
-    {
-      text: `<span class="summary-highlight">Q2 and Q3 Cohorts</span> appear to be <span class="summary-positive">improving over time</span>.`
-    },
-    {
-      text: `<span class="summary-highlight">Q4 Cohort</span> is <span class="summary-neutral">too early to assess</span> with limited data available.`
-    }
-  ];
-  
-  // Render summary
-  const summaryHtml = insights.map(insight => `
+  const summaryHtml = `
     <div class="summary-item">
       <span class="summary-bullet"></span>
-      <span>${insight.text}</span>
+      <span><strong>X-axis:</strong> Calendar quarter (when performance occurred)</span>
     </div>
-  `).join('');
+    <div class="summary-item">
+      <span class="summary-bullet"></span>
+      <span><strong>Lines:</strong> Each line = a hiring cohort (when rep was hired)</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-bullet"></span>
+      <span><strong>Dashed lines:</strong> 2024 cohorts &nbsp;|&nbsp; <strong>Solid lines:</strong> 2025 cohorts</span>
+    </div>
+  `;
   
   elements.hiringSummaryContent.innerHTML = summaryHtml;
   elements.hiringSummarySection.style.display = 'block';
@@ -1408,17 +1403,22 @@ function renderHiringCharts() {
   }
   
   // Create datasets for each cohort
-  const datasets = Object.entries(aggregated.cohorts).map(([cohort, values]) => ({
-    label: cohort,
-    data: values,
-    borderColor: COHORT_COLORS[cohort],
-    backgroundColor: COHORT_COLORS[cohort] + '33',
-    tension: 0.3,
-    pointRadius: 5,
-    pointHoverRadius: 8,
-    borderWidth: 3,
-    spanGaps: false
-  }));
+  // 2024 cohorts get dashed lines, 2025 cohorts get solid lines
+  const datasets = Object.entries(aggregated.cohorts).map(([cohort, values]) => {
+    const is2024 = cohort.startsWith('2024');
+    return {
+      label: cohort,
+      data: values,
+      borderColor: COHORT_COLORS[cohort],
+      backgroundColor: COHORT_COLORS[cohort] + '33',
+      tension: 0.3,
+      pointRadius: is2024 ? 4 : 6,
+      pointHoverRadius: 8,
+      borderWidth: is2024 ? 2 : 3,
+      borderDash: is2024 ? [8, 4] : [],  // Dashed for 2024, solid for 2025
+      spanGaps: false
+    };
+  });
   
   STATE.hiringCharts.cohortAttainment = new Chart(
     document.getElementById('cohortAttainmentChart'),
@@ -1437,13 +1437,7 @@ function renderHiringCharts() {
         },
         plugins: {
           legend: {
-            position: 'top',
-            labels: {
-              color: '#475569',
-              font: { family: "'DM Sans', sans-serif", size: 12, weight: 500 },
-              usePointStyle: true,
-              pointStyle: 'line'
-            }
+            display: false  // Using custom HTML legend instead
           },
           tooltip: {
             backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -1491,6 +1485,39 @@ function renderHiringCharts() {
       }
     }
   );
+  
+  // Generate custom HTML legend
+  generateCohortLegend(datasets);
+}
+
+function generateCohortLegend(datasets) {
+  const legendContainer = document.getElementById('cohortLegend');
+  if (!legendContainer) return;
+  
+  legendContainer.innerHTML = datasets.map((ds, idx) => {
+    const is2024 = ds.label.startsWith('2024');
+    const lineClass = is2024 ? 'dashed' : 'solid';
+    return `
+      <div class="custom-legend-item" data-index="${idx}">
+        <span class="legend-line ${lineClass}" style="color: ${ds.borderColor}"></span>
+        <span>${ds.label}</span>
+      </div>
+    `;
+  }).join('');
+  
+  // Add click handlers to toggle dataset visibility
+  legendContainer.querySelectorAll('.custom-legend-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const index = parseInt(item.dataset.index);
+      const chart = STATE.hiringCharts.cohortAttainment;
+      if (chart) {
+        const meta = chart.getDatasetMeta(index);
+        meta.hidden = !meta.hidden;
+        item.classList.toggle('hidden', meta.hidden);
+        chart.update();
+      }
+    });
+  });
 }
 
 // ============================================================================
