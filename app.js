@@ -576,14 +576,19 @@ async function loadData() {
   setLoading(true);
   
   try {
-    // Load main data and January YoY data in parallel
-    const [mainResult, januaryResult] = await Promise.all([
-      quick.dw.querySync(BQ_QUERY),
-      quick.dw.querySync(JANUARY_YOY_QUERY)
-    ]);
-    
+    // Load main data first
+    const mainResult = await quick.dw.querySync(BQ_QUERY);
     STATE.data = mainResult.results || [];
-    STATE.januaryYoyData = januaryResult.results || [];
+    
+    // Load January YoY data separately (don't block main charts if this fails)
+    try {
+      const januaryResult = await quick.dw.querySync(JANUARY_YOY_QUERY);
+      STATE.januaryYoyData = januaryResult.results || [];
+      console.log('January YoY data loaded:', STATE.januaryYoyData.length, 'rows');
+    } catch (janError) {
+      console.error('Failed to load January YoY data:', janError);
+      STATE.januaryYoyData = [];
+    }
     
     if (STATE.data.length === 0) {
       showEmptyState();
@@ -1097,12 +1102,20 @@ function getFilteredJanuaryData() {
 }
 
 function renderJanuaryYoyChart() {
+  // Check if canvas element exists
+  const canvas = document.getElementById('januaryYoyChart');
+  if (!canvas) {
+    console.error('januaryYoyChart canvas element not found');
+    return;
+  }
+  
   // Destroy existing chart if any
   if (STATE.charts.januaryYoy) {
     STATE.charts.januaryYoy.destroy();
   }
   
   const filteredData = getFilteredJanuaryData();
+  console.log('Rendering January YoY chart with', filteredData.length, 'rows');
   
   // Aggregate by region and year
   const aggregated = {};
