@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cohort Attainment Analysis</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>📊 Cohort Attainment Analysis</h1>
+            <p class="subtitle">Tracking how hiring cohorts ramp up over time</p>
+        </header>
+
+        <div class="controls">
+            <button id="refreshBtn" class="btn-refresh">↻ Refresh Data</button>
+            <div class="toggle-group">
+                <label>X-Axis:</label>
+                <button id="tenureBtn" class="toggle-btn active">Tenure Quarters</button>
+                <button id="calendarBtn" class="toggle-btn">Calendar Quarters</button>
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-header">
+                <h2>Cohort Attainment by Tenure</h2>
+                <p class="chart-subtitle">Avg Attainment % by quarter since hire</p>
+            </div>
+            <div id="customLegend" class="custom-legend"></div>
+            <div class="chart-container">
+                <canvas id="cohortChart"></canvas>
+            </div>
+        </div>
+
+        <div class="info-card">
+            <h3>📖 How to Read This Chart</h3>
+            <ul>
+                <li><strong>Each line = a hiring cohort</strong> (e.g., "2024 Q1" = reps hired Jan-Mar 2024)</li>
+                <li><strong>X-axis = quarters since hire</strong> (First Quarter = their first full quarter)</li>
+                <li><strong>Y-axis = average attainment</strong> (Actuals ÷ Targets)</li>
+                <li><strong>Dashed lines = 2024 cohorts</strong>, Solid lines = 2025 cohorts</li>
+            </ul>
+        </div>
+
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <p>Loading data...</p>
+        </div>
+    </div>
+
+    <script src="/client/quick.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
