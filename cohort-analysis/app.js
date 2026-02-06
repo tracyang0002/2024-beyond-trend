@@ -4,12 +4,12 @@ const STATE = {
     data: []
 };
 
-// Cohort colors matching the screenshot style
+// Cohort colors - consistent by quarter, dashed for 2024, solid for 2025
 const COHORT_COLORS = {
-    '2024 Q1': { color: '#6b7280', dash: [8, 4] },  // Gray, dashed
-    '2024 Q2': { color: '#dc2626', dash: [8, 4] },  // Red, dashed
-    '2024 Q3': { color: '#16a34a', dash: [8, 4] },  // Green, dashed
-    '2024 Q4': { color: '#7c3aed', dash: [8, 4] },  // Purple, dashed
+    '2024 Q1': { color: '#3b82f6', dash: [8, 4] },  // Blue, dashed
+    '2024 Q2': { color: '#10b981', dash: [8, 4] },  // Emerald, dashed
+    '2024 Q3': { color: '#f59e0b', dash: [8, 4] },  // Orange, dashed
+    '2024 Q4': { color: '#ec4899', dash: [8, 4] },  // Pink, dashed
     '2025 Q1': { color: '#3b82f6', dash: [] },      // Blue, solid
     '2025 Q2': { color: '#10b981', dash: [] },      // Emerald, solid
     '2025 Q3': { color: '#f59e0b', dash: [] },      // Orange, solid
