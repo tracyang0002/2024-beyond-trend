@@ -285,11 +285,13 @@ ORDER BY cohort, tenure_quarter_num
 
 // January Year-over-Year Comparison Query
 // Pulls total CW deal count for January of 2024, 2025, and 2026
+// 2024/2025: uses team_restated (calculated), 2026: uses owner_team (raw)
 const JANUARY_YOY_QUERY = `
 WITH base_data AS (
   SELECT 
     tsp.opportunity_id,
     tsp.owner_region,
+    tsp.owner_team,
     CASE
       WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
       WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
@@ -322,11 +324,12 @@ WITH base_data AS (
 )
 SELECT 
   owner_region,
-  team_restated,
+  -- For 2024/2025: use team_restated, For 2026: use owner_team
+  CASE WHEN year = 2026 THEN owner_team ELSE team_restated END as team_restated,
   year,
   SUM(closed_won_opportunity_count) as january_cw_deals
 FROM base_data
-GROUP BY owner_region, team_restated, year
+GROUP BY owner_region, CASE WHEN year = 2026 THEN owner_team ELSE team_restated END, year
 ORDER BY owner_region, team_restated, year
 `;
 
