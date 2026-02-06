@@ -22,9 +22,11 @@ const STATE = {
     winRate: null,
     mixAdjustedWinRate: null,
     actualsVsTargets: null,
-    januaryYoy: null
+    januaryYoy: null,
+    januaryDealSize: null
   },
   januaryYoyData: [],
+  januaryDealSizeData: [],
   // Hiring tab state
   hiringData: [],
   selectedHiringRegions: [], // Array for multi-select (empty = all)
@@ -333,6 +335,57 @@ GROUP BY owner_region, CASE WHEN year = 2026 THEN owner_team ELSE team_restated 
 ORDER BY owner_region, team_restated, year
 `;
 
+// January Year-over-Year Deal Size Query
+// Pulls LTR and CW count for January to calculate avg deal size
+// 2024/2025: uses team_restated (calculated), 2026: uses owner_team (raw)
+const JANUARY_DEAL_SIZE_QUERY = `
+WITH base_data AS (
+  SELECT 
+    tsp.opportunity_id,
+    tsp.owner_region,
+    tsp.owner_team,
+    CASE
+      WHEN tsp.owner_segment IN ('Global Account','Enterprise') THEN tsp.owner_segment
+      WHEN tsp.owner_line_of_business = 'B2B' AND tsp.owner_motion IN ('Acquisition') THEN 'B2B Large Mid-Mkt Acquisition'
+      WHEN tsp.owner_line_of_business = 'B2B' THEN 'B2B Large Mid-Mkt Cross-Sell'
+      WHEN tsp.owner_segment IN ('Mid-Mkt') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Mid-Mkt'
+      WHEN tsp.owner_segment IN ('Large') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') THEN 'D2C Retail Large'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business IN ('D2C','Retail','D2C Retail') AND tsp.owner_motion IN ('Cross-Sell','Acceleration') THEN 'D2C Retail SMB Cross-Sell'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
+      WHEN tsp.owner_segment IN ('SMB','Core') AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
+      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 40000000 THEN 'D2C Retail Large'
+      WHEN tsp.owner_motion = 'Acquisition' AND IFNULL(o.annual_offline_revenue_usd,0) + IFNULL(o.annual_online_revenue_verified_usd,0) + IFNULL(o.incremental_annual_b2b_usd,0) >= 5000000 THEN 'D2C Retail Mid-Mkt'
+      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'Retail' THEN 'Retail SMB Acquisition'
+      WHEN tsp.owner_motion = 'Acquisition' AND tsp.owner_line_of_business = 'D2C' THEN 'D2C SMB Acquisition'
+      WHEN ual.estimated_total_annual_revenue_usd > 40000000 THEN 'D2C Retail Large'
+      WHEN ual.estimated_total_annual_revenue_usd > 5000000 THEN 'D2C Retail Mid-Mkt'
+      ELSE 'D2C Retail SMB Cross-Sell'
+    END as team_restated,
+    EXTRACT(year FROM tsp.close_date) as year,
+    tsp.closed_won_opportunity_count,
+    tsp.closed_won_lifetime_total_revenue
+  FROM \`sdp-for-analysts-platform.rev_ops_prod.temp_sales_performance\` tsp
+  LEFT JOIN \`shopify-dw.sales.sales_opportunities_v1\` o ON tsp.opportunity_id = o.opportunity_id
+  LEFT JOIN \`sdp-prd-commercial.mart.unified_account_list\` ual ON o.salesforce_account_id = ual.account_id
+  WHERE EXTRACT(month FROM tsp.close_date) = 1
+    AND EXTRACT(year FROM tsp.close_date) IN (2024, 2025, 2026)
+    AND tsp.owner_line_of_business NOT IN ('Lending', 'Ads')
+    AND tsp.owner_team NOT LIKE '%CSM%'
+    AND tsp.owner_team NOT IN ('Sales Incubation', 'Launch', 'Partner', 'Unknown', 'D2C Mid-Mkt Cross-Sell', 'D2C Large Cross-Sell')
+    AND tsp.owner_role_function NOT IN ('Customer Success')
+    AND (tsp.owner_user_role NOT LIKE '%INC%' OR tsp.owner_user_role IS NULL)
+)
+SELECT 
+  owner_region,
+  CASE WHEN year = 2026 THEN owner_team ELSE team_restated END as team_restated,
+  year,
+  SUM(closed_won_opportunity_count) as january_cw_deals,
+  SUM(closed_won_lifetime_total_revenue) as january_ltr
+FROM base_data
+GROUP BY owner_region, CASE WHEN year = 2026 THEN owner_team ELSE team_restated END, year
+ORDER BY owner_region, team_restated, year
+`;
+
 // Tenure Analysis Query
 // Returns per-user data with vault_team and region for client-side filtering
 // Uses END of quarter tenure to avoid double-counting reps who cross bucket boundaries mid-quarter
@@ -585,12 +638,18 @@ async function loadData() {
     
     // Load January YoY data separately (don't block main charts if this fails)
     try {
-      const januaryResult = await quick.dw.querySync(JANUARY_YOY_QUERY);
+      const [januaryResult, januaryDealSizeResult] = await Promise.all([
+        quick.dw.querySync(JANUARY_YOY_QUERY),
+        quick.dw.querySync(JANUARY_DEAL_SIZE_QUERY)
+      ]);
       STATE.januaryYoyData = januaryResult.results || [];
+      STATE.januaryDealSizeData = januaryDealSizeResult.results || [];
       console.log('January YoY data loaded:', STATE.januaryYoyData.length, 'rows');
+      console.log('January Deal Size data loaded:', STATE.januaryDealSizeData.length, 'rows');
     } catch (janError) {
       console.error('Failed to load January YoY data:', janError);
       STATE.januaryYoyData = [];
+      STATE.januaryDealSizeData = [];
     }
     
     if (STATE.data.length === 0) {
@@ -1091,6 +1150,9 @@ function renderCharts() {
   
   // Chart 7: January Year-over-Year CW Deals
   renderJanuaryYoyChart();
+  
+  // Chart 8: January Year-over-Year Deal Size
+  renderJanuaryDealSizeChart();
 }
 
 function getFilteredJanuaryData() {
@@ -1202,6 +1264,147 @@ function renderJanuaryYoyChart() {
             title: {
               display: true,
               text: 'CW Deal Count',
+              color: '#64748b',
+              font: { family: "'DM Sans', sans-serif", size: 12 }
+            }
+          }
+        }
+      }
+    }
+  );
+}
+
+function getFilteredJanuaryDealSizeData() {
+  let filtered = [...STATE.januaryDealSizeData];
+  
+  // Apply same team filter as main charts
+  if (STATE.selectedTeams.length > 0 && STATE.selectedTeams.length < STATE.allTeams.length) {
+    filtered = filtered.filter(d => STATE.selectedTeams.includes(d.team_restated));
+  }
+  
+  return filtered;
+}
+
+function renderJanuaryDealSizeChart() {
+  // Check if canvas element exists
+  const canvas = document.getElementById('januaryDealSizeChart');
+  if (!canvas) {
+    console.error('januaryDealSizeChart canvas element not found');
+    return;
+  }
+  
+  // Destroy existing chart if any
+  if (STATE.charts.januaryDealSize) {
+    STATE.charts.januaryDealSize.destroy();
+  }
+  
+  const filteredData = getFilteredJanuaryDealSizeData();
+  console.log('Rendering January Deal Size chart with', filteredData.length, 'rows');
+  
+  // Aggregate by region and year - calculate avg deal size (LTR / CW count)
+  const aggregated = {};
+  REGIONS.forEach(region => {
+    aggregated[region] = { 
+      2024: { ltr: 0, deals: 0 }, 
+      2025: { ltr: 0, deals: 0 }, 
+      2026: { ltr: 0, deals: 0 } 
+    };
+  });
+  
+  filteredData.forEach(row => {
+    const region = row.owner_region;
+    const year = row.year;
+    if (REGIONS.includes(region) && [2024, 2025, 2026].includes(year)) {
+      aggregated[region][year].ltr += row.january_ltr || 0;
+      aggregated[region][year].deals += row.january_cw_deals || 0;
+    }
+  });
+  
+  const years = ['Jan 2024', 'Jan 2025', 'Jan 2026'];
+  
+  const datasets = REGIONS.map(region => ({
+    label: region,
+    data: [
+      aggregated[region][2024].deals > 0 ? aggregated[region][2024].ltr / aggregated[region][2024].deals : null,
+      aggregated[region][2025].deals > 0 ? aggregated[region][2025].ltr / aggregated[region][2025].deals : null,
+      aggregated[region][2026].deals > 0 ? aggregated[region][2026].ltr / aggregated[region][2026].deals : null
+    ],
+    borderColor: REGION_COLORS[region],
+    backgroundColor: REGION_COLORS[region] + '33',
+    tension: 0.3,
+    pointRadius: 6,
+    pointHoverRadius: 9,
+    borderWidth: 3,
+    spanGaps: true
+  }));
+  
+  STATE.charts.januaryDealSize = new Chart(
+    canvas,
+    {
+      type: 'line',
+      data: { labels: years, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#475569',
+              font: { family: "'DM Sans', sans-serif", size: 11 },
+              boxWidth: 12,
+              padding: 15,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            titleColor: '#1e293b',
+            bodyColor: '#475569',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            padding: 12,
+            titleFont: { family: "'DM Sans', sans-serif", weight: 600 },
+            bodyFont: { family: "'JetBrains Mono', monospace", size: 12 },
+            callbacks: {
+              label: function(context) {
+                let value = context.parsed.y;
+                if (value >= 1000000) {
+                  return `${context.dataset.label}: $${(value / 1000000).toFixed(2)}M`;
+                }
+                if (value >= 1000) {
+                  return `${context.dataset.label}: $${(value / 1000).toFixed(1)}K`;
+                }
+                return `${context.dataset.label}: $${value.toFixed(0)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: { color: '#475569', font: { family: "'DM Sans', sans-serif", size: 11 } }
+          },
+          y: {
+            min: 0,
+            grid: { color: 'rgba(226, 232, 240, 0.8)', drawBorder: false },
+            ticks: {
+              color: '#475569',
+              font: { family: "'JetBrains Mono', monospace", size: 11 },
+              callback: function(value) {
+                if (value >= 1000000) return '$' + (value / 1000000).toFixed(1) + 'M';
+                if (value >= 1000) return '$' + (value / 1000).toFixed(0) + 'K';
+                return '$' + value;
+              }
+            },
+            title: {
+              display: true,
+              text: 'Avg Deal Size ($)',
               color: '#64748b',
               font: { family: "'DM Sans', sans-serif", size: 12 }
             }
